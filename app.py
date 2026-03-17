@@ -234,7 +234,7 @@ def render_message(msg: dict):
             if msg.get("table_data"):
                 import pandas as pd
                 df = pd.DataFrame(msg["table_data"])
-                st.table(df)
+                st.markdown(df.to_html(index=False), unsafe_allow_html=True)
 
             # Final text response
             if msg.get("content"):
