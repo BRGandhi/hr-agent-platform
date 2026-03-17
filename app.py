@@ -234,7 +234,7 @@ def render_message(msg: dict):
             if msg.get("table_data"):
                 import pandas as pd
                 df = pd.DataFrame(msg["table_data"])
-                st.dataframe(df, use_container_width=True)
+                st.table(df)
 
             # Final text response
             if msg.get("content"):
