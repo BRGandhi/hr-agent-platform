@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hr-intelligence-platform
+    runtime: docker
+    plan: free
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false        # set this manually in the Render dashboard
+      - key: APP_PASSWORD
+        sync: false        # set this manually in the Render dashboard

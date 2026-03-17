@@ -97,6 +97,45 @@ def init_session_state():
 init_session_state()
 
 
+# ── Password gate ──────────────────────────────────────────────────────────
+def _get_app_password() -> str:
+    """Read APP_PASSWORD from st.secrets or environment variable."""
+    try:
+        return st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        return os.getenv("APP_PASSWORD", "")
+
+
+def check_password() -> bool:
+    """Show login form if APP_PASSWORD is set. Returns True when authenticated."""
+    expected = _get_app_password()
+    if not expected:
+        return True  # No password configured → open access
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    # Centre the login card
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        st.markdown("## 🧠 HR Intelligence Platform")
+        st.markdown("Enter the access password to continue.")
+        with st.form("login"):
+            pwd = st.text_input("Password", type="password", placeholder="••••••••")
+            if st.form_submit_button("Login", use_container_width=True):
+                if pwd == expected:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect password.")
+    st.stop()
+    return False
+
+
+if not check_password():
+    st.stop()
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🧠 HR Intelligence")

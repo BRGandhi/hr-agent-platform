@@ -1,8 +1,6 @@
-# Database (generated from CSV)
-hr_data.db
-
 # Environment / secrets
 .env
+.streamlit/secrets.toml
 
 # Python cache
 __pycache__/
