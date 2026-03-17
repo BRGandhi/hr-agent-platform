@@ -28,53 +28,217 @@ def check_db_exists() -> bool:
 # ── Custom CSS ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Chat bubbles */
-    .user-bubble {
-        background: #E3F2FD;
-        border-radius: 12px 12px 2px 12px;
-        padding: 12px 16px;
-        margin: 8px 0;
-        max-width: 80%;
-        margin-left: auto;
-        color: #1a1a1a;
+    /* ── Google Font: Inter ── */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
     }
-    .assistant-bubble {
-        background: #F8F9FA;
-        border-left: 4px solid #4CAF50;
-        border-radius: 0 12px 12px 12px;
-        padding: 12px 16px;
-        margin: 8px 0;
-        max-width: 90%;
-        color: #1a1a1a;
+
+    /* ── Hide Streamlit chrome ── */
+    #MainMenu, footer { visibility: hidden; }
+    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+
+    /* ── App header ── */
+    .app-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 0 4px 0;
+        border-bottom: 2px solid #6366F1;
+        margin-bottom: 1.5rem;
     }
-    /* Tool call badge */
-    .tool-badge {
-        display: inline-block;
-        background: #FFF3E0;
-        border: 1px solid #FF9800;
-        border-radius: 6px;
-        padding: 2px 8px;
-        font-size: 12px;
-        font-family: monospace;
-        color: #E65100;
-        margin-right: 6px;
+    .app-header-icon {
+        font-size: 2rem;
+        line-height: 1;
     }
-    /* Section headers */
-    .section-header {
-        font-size: 13px;
+    .app-header-title {
+        font-size: 1.45rem;
+        font-weight: 700;
+        color: #1E293B;
+        margin: 0;
+        letter-spacing: -0.3px;
+    }
+    .app-header-sub {
+        font-size: 0.78rem;
+        color: #64748B;
+        margin: 0;
+        font-weight: 500;
+    }
+
+    /* ── KPI metric strip ── */
+    .kpi-strip {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 1.25rem;
+        flex-wrap: wrap;
+    }
+    .kpi-card {
+        background: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        border-radius: 10px;
+        padding: 10px 18px;
+        min-width: 120px;
+        flex: 1;
+    }
+    .kpi-label {
+        font-size: 0.7rem;
         font-weight: 600;
-        color: #666;
+        color: #64748B;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-top: 16px;
+        letter-spacing: 0.6px;
+    }
+    .kpi-value {
+        font-size: 1.35rem;
+        font-weight: 700;
+        color: #1E293B;
+        margin-top: 2px;
+    }
+    .kpi-value.danger { color: #EF4444; }
+    .kpi-value.success { color: #10B981; }
+    .kpi-value.accent { color: #6366F1; }
+
+    /* ── Chat messages ── */
+    .stChatMessage {
+        border-radius: 12px !important;
         margin-bottom: 4px;
     }
-    /* Sidebar example button styling */
-    .stButton > button {
+
+    /* ── Tool call expander ── */
+    .tool-expander-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .tool-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: #EEF2FF;
+        border: 1px solid #C7D2FE;
+        border-radius: 20px;
+        padding: 3px 10px;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #4338CA;
+        font-family: 'Inter', sans-serif;
+        letter-spacing: 0.1px;
+    }
+    .tool-badge.result {
+        background: #F0FDF4;
+        border-color: #BBF7D0;
+        color: #15803D;
+    }
+
+    /* ── Sidebar styling ── */
+    [data-testid="stSidebar"] {
+        background: #0F172A;
+    }
+    [data-testid="stSidebar"] * {
+        color: #E2E8F0 !important;
+    }
+    [data-testid="stSidebar"] .stTextInput input {
+        background: #1E293B !important;
+        border: 1px solid #334155 !important;
+        color: #F1F5F9 !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stSidebar"] .stTextInput input::placeholder {
+        color: #64748B !important;
+    }
+    [data-testid="stSidebar"] .stButton > button {
+        background: #1E293B !important;
+        border: 1px solid #334155 !important;
+        color: #CBD5E1 !important;
+        border-radius: 8px !important;
         width: 100%;
         text-align: left;
         padding: 8px 12px;
-        border-radius: 8px;
+        font-size: 13px;
+        transition: all 0.15s ease;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: #334155 !important;
+        border-color: #6366F1 !important;
+        color: #F1F5F9 !important;
+    }
+    [data-testid="stSidebar"] .stToggle label {
+        color: #CBD5E1 !important;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: #1E293B !important;
+    }
+    [data-testid="stSidebar"] .sidebar-section-label {
+        font-size: 10.5px;
+        font-weight: 700;
+        color: #475569 !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin: 16px 0 8px 0;
+        display: block;
+    }
+    .sidebar-logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 0 12px 0;
+    }
+    .sidebar-logo-icon {
+        font-size: 1.6rem;
+        line-height: 1;
+    }
+    .sidebar-logo-text {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #F1F5F9 !important;
+        letter-spacing: -0.2px;
+    }
+    .sidebar-logo-sub {
+        font-size: 0.68rem;
+        color: #64748B !important;
+        font-weight: 500;
+    }
+
+    /* ── Status pill ── */
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 20px;
+        padding: 4px 12px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .status-pill.ok {
+        background: #052E16;
+        border: 1px solid #166534;
+        color: #4ADE80 !important;
+    }
+    .status-pill.error {
+        background: #450A0A;
+        border: 1px solid #7F1D1D;
+        color: #FCA5A5 !important;
+    }
+
+    /* ── Dataframe ── */
+    .stDataFrame { border-radius: 10px; overflow: hidden; }
+
+    /* ── Chat input ── */
+    .stChatInputContainer {
+        border-top: 1px solid #E2E8F0;
+        padding-top: 12px;
+    }
+
+    /* ── New conversation button (main sidebar) ── */
+    .new-convo-btn > button {
+        background: linear-gradient(135deg, #6366F1, #8B5CF6) !important;
+        border: none !important;
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+    }
+    .new-convo-btn > button:hover {
+        opacity: 0.9 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,11 +247,12 @@ st.markdown("""
 # ── Session state initialization ───────────────────────────────────────────
 def init_session_state():
     defaults = {
-        "messages": [],          # list of {role, content, tool_calls, charts}
-        "agent": None,           # HRAgent instance
+        "messages": [],
+        "agent": None,
         "api_key": "",
         "db_ready": False,
         "show_tool_calls": True,
+        "db_stats": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -99,7 +264,6 @@ init_session_state()
 
 # ── Password gate ──────────────────────────────────────────────────────────
 def _get_app_password() -> str:
-    """Read APP_PASSWORD from st.secrets or environment variable."""
     try:
         return st.secrets.get("APP_PASSWORD", "")
     except Exception:
@@ -107,15 +271,12 @@ def _get_app_password() -> str:
 
 
 def check_password() -> bool:
-    """Show login form if APP_PASSWORD is set. Returns True when authenticated."""
     expected = _get_app_password()
     if not expected:
-        return True  # No password configured → open access
-
+        return True
     if st.session_state.get("authenticated"):
         return True
 
-    # Centre the login card
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         st.markdown("## 🧠 HR Intelligence Platform")
@@ -136,51 +297,74 @@ if not check_password():
     st.stop()
 
 
+# ── DB Stats (cached) ───────────────────────────────────────────────────────
+def get_db_stats():
+    if st.session_state.db_stats is None and check_db_exists():
+        try:
+            from database.connector import HRDatabase
+            db = HRDatabase()
+            st.session_state.db_stats = db.get_table_stats()
+        except Exception:
+            pass
+    return st.session_state.db_stats
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("🧠 HR Intelligence")
-    st.caption("Agentic Platform · Claude Opus 4.6")
+    st.markdown("""
+    <div class="sidebar-logo">
+        <span class="sidebar-logo-icon">🧠</span>
+        <div>
+            <div class="sidebar-logo-text">HR Intelligence</div>
+            <div class="sidebar-logo-sub">Claude Opus 4.6 · Agentic</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     st.divider()
 
     # API Key
-    st.markdown("### API Key")
+    st.markdown('<span class="sidebar-section-label">API Key</span>', unsafe_allow_html=True)
     api_key_input = st.text_input(
         "Anthropic API Key",
         type="password",
         value=st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
         placeholder="sk-ant-...",
         help="Get your key at console.anthropic.com",
+        label_visibility="collapsed",
     )
     if api_key_input != st.session_state.api_key:
         st.session_state.api_key = api_key_input
-        st.session_state.agent = None  # reset agent when key changes
+        st.session_state.agent = None
 
     st.divider()
 
     # DB Status
-    st.markdown("### Database")
+    st.markdown('<span class="sidebar-section-label">Database</span>', unsafe_allow_html=True)
     if check_db_exists():
-        st.success("hr_data.db ready", icon="✅")
+        st.markdown('<div class="status-pill ok">● hr_data.db connected</div>', unsafe_allow_html=True)
         st.session_state.db_ready = True
+        stats = get_db_stats()
+        if stats:
+            st.caption(f"{stats['total_employees']:,} employees · {stats['attrition_rate_pct']}% attrition")
     else:
-        st.error("hr_data.db not found", icon="❌")
+        st.markdown('<div class="status-pill error">✕ hr_data.db not found</div>', unsafe_allow_html=True)
         st.code("python setup_db.py", language="bash")
-        st.caption("Run setup_db.py first to load the HR data.")
         st.session_state.db_ready = False
 
     st.divider()
 
     # Settings
-    st.markdown("### Settings")
+    st.markdown('<span class="sidebar-section-label">Settings</span>', unsafe_allow_html=True)
     st.session_state.show_tool_calls = st.toggle(
-        "Show tool calls", value=st.session_state.show_tool_calls,
-        help="Display SQL queries and tool activity"
+        "Show tool calls",
+        value=st.session_state.show_tool_calls,
+        help="Display SQL queries and tool activity inline",
     )
 
     st.divider()
 
     # Example questions
-    st.markdown("### Example Questions")
+    st.markdown('<span class="sidebar-section-label">Example Questions</span>', unsafe_allow_html=True)
 
     example_questions = [
         "How many employees left the company?",
@@ -192,7 +376,7 @@ with st.sidebar:
         "Show age distribution of employees who left",
         "How does overtime affect attrition?",
         "What's the average tenure by department?",
-        "Show satisfaction scores for employees who left vs stayed",
+        "Show satisfaction scores for leavers vs stayers",
     ]
 
     for q in example_questions:
@@ -202,21 +386,58 @@ with st.sidebar:
 
     st.divider()
 
-    # New conversation
-    if st.button("🗑️ New Conversation", use_container_width=True):
+    st.markdown('<div class="new-convo-btn">', unsafe_allow_html=True)
+    if st.button("+ New Conversation", use_container_width=True):
         st.session_state.messages = []
         if st.session_state.agent:
             st.session_state.agent.reset()
         st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ── Main area ──────────────────────────────────────────────────────────────
-st.title("HR Intelligence Platform")
-st.caption("Ask anything about your workforce · Powered by Claude Opus 4.6 + SQLite")
+st.markdown("""
+<div class="app-header">
+    <span class="app-header-icon">🧠</span>
+    <div>
+        <p class="app-header-title">HR Intelligence Platform</p>
+        <p class="app-header-sub">Ask anything about your workforce · Powered by Claude Opus 4.6 + SQLite</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# KPI strip
+stats = get_db_stats()
+if stats:
+    attrition_color = "danger" if stats["attrition_rate_pct"] > 15 else "accent"
+    st.markdown(f"""
+    <div class="kpi-strip">
+        <div class="kpi-card">
+            <div class="kpi-label">Total Employees</div>
+            <div class="kpi-value accent">{stats["total_employees"]:,}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Attrited</div>
+            <div class="kpi-value danger">{stats["attrited_employees"]:,}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Active</div>
+            <div class="kpi-value success">{stats["active_employees"]:,}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Attrition Rate</div>
+            <div class="kpi-value {attrition_color}">{stats["attrition_rate_pct"]}%</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Data Columns</div>
+            <div class="kpi-value">{len(stats.get("columns", []))}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Warnings if not ready
 if not st.session_state.api_key:
-    st.warning("Enter your Anthropic API key in the sidebar to get started.")
+    st.info("Enter your Anthropic API key in the sidebar to get started.", icon="🔑")
 
 if not st.session_state.db_ready:
     st.error("Database not found. Run `python setup_db.py` in the hr_agent_platform folder.")
@@ -225,15 +446,11 @@ if not st.session_state.db_ready:
 
 # ── Agent initialization ───────────────────────────────────────────────────
 def get_agent():
-    """Lazy-initialize the HRAgent (imports are deferred to avoid errors at startup)."""
     if st.session_state.agent is None and st.session_state.api_key:
         from database.connector import HRDatabase
         from agent.orchestrator import HRAgent
         db = HRDatabase()
-        st.session_state.agent = HRAgent(
-            api_key=st.session_state.api_key,
-            db=db,
-        )
+        st.session_state.agent = HRAgent(api_key=st.session_state.api_key, db=db)
     return st.session_state.agent
 
 
@@ -242,19 +459,17 @@ def render_message(msg: dict):
     role = msg["role"]
 
     if role == "user":
-        st.markdown(
-            f'<div class="user-bubble">👤 {msg["content"]}</div>',
-            unsafe_allow_html=True,
-        )
+        with st.chat_message("user"):
+            st.markdown(msg["content"])
     else:
-        with st.container():
+        with st.chat_message("assistant"):
             # Tool calls (collapsible)
             if st.session_state.show_tool_calls and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
-                    with st.expander(
-                        f"🔧 Tool: **{tc['name']}**" + (f" — {tc['explanation'][:60]}" if tc.get("explanation") else ""),
-                        expanded=False,
-                    ):
+                    label = f"⚡ **{tc['name']}**"
+                    if tc.get("explanation"):
+                        label += f" — {tc['explanation'][:70]}"
+                    with st.expander(label, expanded=False):
                         if tc.get("sql"):
                             st.markdown("**SQL Query:**")
                             st.code(tc["sql"], language="sql")
@@ -269,18 +484,15 @@ def render_message(msg: dict):
                 except Exception as e:
                     st.warning(f"Could not render chart: {e}")
 
-            # Table results (if content is JSON rows)
+            # Table results
             if msg.get("table_data"):
                 import pandas as pd
                 df = pd.DataFrame(msg["table_data"])
-                st.markdown(df.to_html(index=False), unsafe_allow_html=True)
+                st.dataframe(df, use_container_width=True, hide_index=True)
 
             # Final text response
             if msg.get("content"):
-                st.markdown(
-                    f'<div class="assistant-bubble">🤖 {msg["content"]}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(msg["content"])
 
 
 for msg in st.session_state.messages:
@@ -301,60 +513,86 @@ def handle_question(user_input: str):
         st.error("Could not initialize agent. Check your API key.")
         return
 
-    # Add user message to history
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # Placeholders for live streaming in the UI
     tool_calls_collected = []
     charts_collected = []
     table_data = None
 
-    with st.spinner("Thinking..."):
+    with st.chat_message("assistant"):
         status_placeholder = st.empty()
         final_text = ""
 
-        for event in agent.chat(user_input):
-            etype = event.get("type")
+        with st.spinner("Thinking..."):
+            for event in agent.chat(user_input):
+                etype = event.get("type")
 
-            if etype == "tool_call":
-                tool_calls_collected.append({
-                    "name": event["name"],
-                    "explanation": event.get("explanation", ""),
-                    "sql": event.get("sql", ""),
-                    "inputs": event.get("inputs", {}),
-                })
-                if st.session_state.show_tool_calls:
-                    status_placeholder.info(
-                        f"🔧 Calling **{event['name']}**"
-                        + (f": {event['explanation'][:80]}" if event.get("explanation") else "")
-                    )
+                if etype == "tool_call":
+                    tool_calls_collected.append({
+                        "name": event["name"],
+                        "explanation": event.get("explanation", ""),
+                        "sql": event.get("sql", ""),
+                        "inputs": event.get("inputs", {}),
+                    })
+                    if st.session_state.show_tool_calls:
+                        status_placeholder.markdown(
+                            f'<span class="tool-badge">⚡ {event["name"]}'
+                            + (f' — {event["explanation"][:80]}' if event.get("explanation") else "")
+                            + "</span>",
+                            unsafe_allow_html=True,
+                        )
 
-            elif etype == "tool_result":
-                # Try to parse result as a table for display
-                try:
-                    parsed = json.loads(event["result"])
-                    if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
-                        table_data = parsed
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                elif etype == "tool_result":
+                    try:
+                        parsed = json.loads(event["result"])
+                        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+                            table_data = parsed
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
-            elif etype == "chart":
-                charts_collected.append({
-                    "chart_json": event["chart_json"],
-                    "title": event.get("title", "Chart"),
-                })
+                elif etype == "chart":
+                    charts_collected.append({
+                        "chart_json": event["chart_json"],
+                        "title": event.get("title", "Chart"),
+                    })
 
-            elif etype == "final_text":
-                final_text = event["text"]
-                status_placeholder.empty()
+                elif etype == "final_text":
+                    final_text = event["text"]
+                    status_placeholder.empty()
 
-            elif etype == "error":
-                status_placeholder.empty()
-                st.error(event["message"])
-                # Still save partial results
-                break
+                elif etype == "error":
+                    status_placeholder.empty()
+                    st.error(event["message"])
+                    break
 
-    # Save assistant message to history
+        # Render results inline (before rerun)
+        if st.session_state.show_tool_calls and tool_calls_collected:
+            for tc in tool_calls_collected:
+                label = f"⚡ **{tc['name']}**"
+                if tc.get("explanation"):
+                    label += f" — {tc['explanation'][:70]}"
+                with st.expander(label, expanded=False):
+                    if tc.get("sql"):
+                        st.markdown("**SQL Query:**")
+                        st.code(tc["sql"], language="sql")
+                    elif tc.get("inputs"):
+                        st.json(tc["inputs"])
+
+        for chart in charts_collected:
+            try:
+                fig = pio.from_json(chart["chart_json"])
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not render chart: {e}")
+
+        if table_data:
+            import pandas as pd
+            df = pd.DataFrame(table_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+        if final_text:
+            st.markdown(final_text)
+
     st.session_state.messages.append({
         "role": "assistant",
         "content": final_text,
@@ -366,15 +604,13 @@ def handle_question(user_input: str):
     st.rerun()
 
 
-# ── Chat input at the bottom ───────────────────────────────────────────────
-# Handle pending question from sidebar buttons
+# ── Chat input ─────────────────────────────────────────────────────────────
 if "pending_question" in st.session_state:
     pending = st.session_state.pop("pending_question")
     handle_question(pending)
 
-# Text input
 user_input = st.chat_input(
-    "Ask about your workforce... (e.g. 'Show attrition rate by department as a bar chart')"
+    "Ask about your workforce... (e.g. 'Show attrition by department as a bar chart')"
 )
 if user_input:
     handle_question(user_input)

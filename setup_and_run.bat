@@ -63,7 +63,7 @@ if exist "hr_data.db" (
     "%PYTHON%" setup_db.py
     if %ERRORLEVEL% NEQ 0 (
         echo [ERROR] Database setup failed. Make sure WA_Fn-UseC_-HR-Employee-Attrition.csv
-        echo         is in C:\Users\bhavy\Downloads\
+        echo         is in the parent folder of hr_agent_platform\
         pause
         exit /b 1
     )

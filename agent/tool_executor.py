@@ -149,43 +149,96 @@ class ToolExecutor:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="ignore")
 
+        PALETTE = [
+            "#6366F1", "#10B981", "#F59E0B", "#EF4444",
+            "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6",
+        ]
+
         try:
             if chart_type == "bar":
                 fig = px.bar(df, x=x_col, y=y_col, title=title,
                              color=color_col, text_auto=True,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
+                             color_discrete_sequence=PALETTE)
             elif chart_type == "horizontal_bar":
                 fig = px.bar(df, x=y_col, y=x_col, orientation="h", title=title,
                              color=color_col, text_auto=True,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
+                             color_discrete_sequence=PALETTE)
             elif chart_type == "pie":
                 fig = px.pie(df, names=x_col, values=y_col, title=title,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
+                             color_discrete_sequence=PALETTE)
             elif chart_type == "histogram":
                 fig = px.histogram(df, x=x_col, title=title,
                                    color=color_col,
-                                   color_discrete_sequence=px.colors.qualitative.Set2)
+                                   color_discrete_sequence=PALETTE)
             elif chart_type == "scatter":
                 fig = px.scatter(df, x=x_col, y=y_col, title=title,
                                  color=color_col, hover_data=df.columns.tolist(),
-                                 color_discrete_sequence=px.colors.qualitative.Set2)
+                                 color_discrete_sequence=PALETTE)
             elif chart_type == "line":
                 fig = px.line(df, x=x_col, y=y_col, title=title,
                               color=color_col, markers=True,
-                              color_discrete_sequence=px.colors.qualitative.Set2)
+                              color_discrete_sequence=PALETTE)
             elif chart_type == "box":
                 fig = px.box(df, x=x_col, y=y_col, title=title,
                              color=color_col,
-                             color_discrete_sequence=px.colors.qualitative.Set2)
+                             color_discrete_sequence=PALETTE)
             else:
-                fig = px.bar(df, x=x_col, y=y_col, title=title)
+                fig = px.bar(df, x=x_col, y=y_col, title=title,
+                             color_discrete_sequence=PALETTE)
 
+            # ── Professional chart theme ──────────────────────────────
+            PALETTE = [
+                "#6366F1", "#10B981", "#F59E0B", "#EF4444",
+                "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6",
+            ]
             fig.update_layout(
-                plot_bgcolor="white",
-                paper_bgcolor="white",
-                font=dict(family="Inter, sans-serif"),
-                title_font_size=16,
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF",
+                font=dict(family="Inter, sans-serif", color="#1E293B"),
+                title_font=dict(size=17, color="#1E293B", family="Inter, sans-serif"),
+                title_x=0,
+                legend=dict(
+                    bgcolor="rgba(0,0,0,0)",
+                    bordercolor="rgba(0,0,0,0)",
+                    font=dict(size=12),
+                ),
+                margin=dict(t=52, b=40, l=16, r=16),
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor="#F1F5F9",
+                    linecolor="#E2E8F0",
+                    tickfont=dict(size=12, color="#64748B"),
+                    title_font=dict(size=13, color="#64748B"),
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor="#F1F5F9",
+                    linecolor="#E2E8F0",
+                    tickfont=dict(size=12, color="#64748B"),
+                    title_font=dict(size=13, color="#64748B"),
+                    zeroline=False,
+                ),
+                colorway=PALETTE,
             )
+            # Round bar corners and clean up traces
+            if chart_type in ("bar", "horizontal_bar"):
+                fig.update_traces(
+                    marker_line_width=0,
+                    textfont=dict(size=11, color="#1E293B"),
+                    textposition="outside",
+                )
+            elif chart_type == "pie":
+                fig.update_traces(
+                    textposition="inside",
+                    textinfo="percent+label",
+                    hole=0.35,
+                    marker=dict(line=dict(color="#FFFFFF", width=2)),
+                )
+            elif chart_type == "scatter":
+                fig.update_traces(marker=dict(size=8, opacity=0.8, line=dict(width=1, color="white")))
+            elif chart_type == "line":
+                fig.update_traces(line=dict(width=2.5), marker=dict(size=7))
 
             chart_json = fig.to_json()
             return json.dumps({"chart_json": chart_json, "title": title})

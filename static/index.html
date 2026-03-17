@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HR Intelligence Platform</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- Plotly for charts -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
+</head>
+<body>
+  <!-- ── Layout ─────────────────────────────────────────────────────────── -->
+  <div class="layout">
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        <div class="sidebar-logo-icon">🧠</div>
+        <div>
+          <div class="sidebar-logo-text">HR Intelligence</div>
+          <div class="sidebar-logo-sub">Claude Opus 4.6 · Agentic</div>
+        </div>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <!-- API Key -->
+      <div class="sidebar-section-label">API Key</div>
+      <div class="input-wrap">
+        <input
+          id="apiKeyInput"
+          type="password"
+          placeholder="sk-ant-..."
+          class="sidebar-input"
+          autocomplete="off"
+        />
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <!-- DB Status -->
+      <div class="sidebar-section-label">Database</div>
+      <div id="dbStatus" class="status-pill loading">⏳ Connecting…</div>
+      <div id="dbCaption" class="sidebar-caption"></div>
+
+      <hr class="sidebar-divider" />
+
+      <!-- Settings -->
+      <div class="sidebar-section-label">Settings</div>
+      <label class="toggle-label">
+        <input type="checkbox" id="showToolCalls" checked />
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        Show tool calls
+      </label>
+
+      <hr class="sidebar-divider" />
+
+      <!-- Example Questions -->
+      <div class="sidebar-section-label">Example Questions</div>
+      <div id="examples" class="examples-list">
+        <button class="example-btn" data-q="How many employees left the company?">How many employees left the company?</button>
+        <button class="example-btn" data-q="What's the attrition rate by department?">What's the attrition rate by department?</button>
+        <button class="example-btn" data-q="Show attrition by job role as a bar chart">Show attrition by job role as a bar chart</button>
+        <button class="example-btn" data-q="Which factors most contribute to attrition?">Which factors most contribute to attrition?</button>
+        <button class="example-btn" data-q="Compare average salary across departments">Compare average salary across departments</button>
+        <button class="example-btn" data-q="Who are the highest risk employees?">Who are the highest risk employees?</button>
+        <button class="example-btn" data-q="Show age distribution of employees who left">Show age distribution of employees who left</button>
+        <button class="example-btn" data-q="How does overtime affect attrition?">How does overtime affect attrition?</button>
+        <button class="example-btn" data-q="What's the average tenure by department?">What's the average tenure by department?</button>
+        <button class="example-btn" data-q="Show satisfaction scores for leavers vs stayers">Show satisfaction scores for leavers vs stayers</button>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <button class="btn-new-chat" id="newChatBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Conversation
+      </button>
+    </aside>
+
+    <!-- Main content -->
+    <div class="main">
+
+      <!-- Top bar -->
+      <header class="topbar">
+        <button class="menu-toggle" id="menuToggle" aria-label="Toggle sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <div class="topbar-brand">
+          <span class="topbar-icon">🧠</span>
+          <div>
+            <div class="topbar-title">HR Intelligence Platform</div>
+            <div class="topbar-sub">Ask anything about your workforce · Powered by Claude Opus 4.6 + SQLite</div>
+          </div>
+        </div>
+      </header>
+
+      <!-- KPI strip -->
+      <div class="kpi-strip" id="kpiStrip"></div>
+
+      <!-- Messages -->
+      <div class="messages" id="messages">
+        <!-- Empty state -->
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">🧠</div>
+          <h2 class="empty-title">Ask anything about your workforce</h2>
+          <p class="empty-sub">Query data, analyze trends, and get AI-powered HR insights through natural conversation.</p>
+          <div class="suggestion-grid">
+            <button class="suggestion-card" data-q="What is the overall attrition rate?">
+              <span class="suggestion-icon">📊</span>
+              <span>What is the overall attrition rate?</span>
+            </button>
+            <button class="suggestion-card" data-q="Show attrition by department as a chart">
+              <span class="suggestion-icon">📉</span>
+              <span>Show attrition by department as a chart</span>
+            </button>
+            <button class="suggestion-card" data-q="Which roles have the highest turnover?">
+              <span class="suggestion-icon">⚡</span>
+              <span>Which roles have the highest turnover?</span>
+            </button>
+            <button class="suggestion-card" data-q="How does overtime affect attrition?">
+              <span class="suggestion-icon">⏰</span>
+              <span>How does overtime affect attrition?</span>
+            </button>
+            <button class="suggestion-card" data-q="Compare average salary across departments">
+              <span class="suggestion-icon">💰</span>
+              <span>Compare average salary across departments</span>
+            </button>
+            <button class="suggestion-card" data-q="Who are the highest-risk employees?">
+              <span class="suggestion-icon">🔍</span>
+              <span>Who are the highest-risk employees?</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input bar -->
+      <div class="input-bar">
+        <div class="input-inner">
+          <textarea
+            id="chatInput"
+            placeholder="Ask about your workforce… (Shift+Enter for new line)"
+            rows="1"
+            class="chat-textarea"
+          ></textarea>
+          <button class="send-btn" id="sendBtn" disabled>
+            <svg id="sendIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            <svg id="loadingIcon" class="spin hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" opacity=".25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="16" /></svg>
+          </button>
+        </div>
+        <p class="input-hint">Shift+Enter for new line · AI responses may require verification</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error toast -->
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
