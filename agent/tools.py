@@ -1,6 +1,6 @@
 """
-Tool JSON schemas passed to Claude.
-These tell Claude what tools it can call and what parameters to use.
+Canonical tool schemas used by every provider adapter.
+Anthropic consumes these directly; OpenAI-compatible adapters convert them.
 """
 
 TOOLS = [

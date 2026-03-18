@@ -1,26 +1,24 @@
 """
-The Agent Orchestrator: implements the Think → Act → Observe loop.
-
-Flow:
-  1. THINK  — Send conversation + tools to Claude (claude-opus-4-6)
-  2. ACT    — Claude responds with text or tool_use blocks
-  3. OBSERVE — If tool_use: execute tool, append result, loop back to 1
-              If end_turn: return final text to Streamlit
+The agent orchestrator implements a provider-agnostic Think → Act → Observe loop.
 """
 
-import anthropic
+from __future__ import annotations
+
+import json
 from typing import Generator
 
-from agent.tools import TOOLS
-from agent.tool_executor import ToolExecutor
+from agent.llm_client import LLMClientError, LLMConfig, create_llm_client
 from agent.prompts import SYSTEM_PROMPT
+from agent.tool_executor import ToolExecutor
+from agent.tools import TOOLS
+from config import MAX_AGENT_ITERATIONS
 from database.connector import HRDatabase
-from config import DEFAULT_MODEL, MAX_AGENT_ITERATIONS
 
 
 class HRAgent:
-    def __init__(self, api_key: str, db: HRDatabase):
-        self.client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, llm_config: LLMConfig, db: HRDatabase):
+        self.llm_config = llm_config.normalized()
+        self.client = create_llm_client(self.llm_config)
         self.executor = ToolExecutor(db)
         self.conversation_history: list[dict] = []
 
@@ -28,21 +26,24 @@ class HRAgent:
         """Clear conversation history to start a new session."""
         self.conversation_history = []
 
+    def update_llm_config(self, llm_config: LLMConfig):
+        normalized = llm_config.normalized()
+        if normalized != self.llm_config:
+            self.llm_config = normalized
+            self.client = create_llm_client(normalized)
+
     def chat(self, user_message: str) -> Generator[dict, None, None]:
         """
         Send a user message and run the agent loop.
 
-        Yields event dicts so Streamlit can stream updates in real-time:
+        Yields event dicts for the UI:
           {"type": "tool_call",   "name": str, "explanation": str, "sql": str}
-          {"type": "tool_result", "name": str, "result": str}
+          {"type": "tool_result", "name": str, "result": str, "table_data": list | dict | None}
           {"type": "chart",       "chart_json": str, "title": str}
           {"type": "final_text",  "text": str}
           {"type": "error",       "message": str}
         """
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message,
-        })
+        self.conversation_history.append({"role": "user", "content": user_message})
 
         iteration = 0
 
@@ -50,109 +51,85 @@ class HRAgent:
             iteration += 1
 
             try:
-                response = self.client.messages.create(
-                    model=DEFAULT_MODEL,
-                    max_tokens=4096,
-                    thinking={"type": "adaptive"},
-                    system=SYSTEM_PROMPT,
+                response = self.client.create_response(
+                    system_prompt=SYSTEM_PROMPT,
                     tools=TOOLS,
                     messages=self.conversation_history,
                 )
-            except anthropic.AuthenticationError:
-                yield {"type": "error", "message": "Invalid Anthropic API key. Please check your key in the sidebar."}
-                return
-            except anthropic.RateLimitError:
-                yield {"type": "error", "message": "Rate limit reached. Please wait a moment and try again."}
-                return
-            except anthropic.APIConnectionError:
-                yield {"type": "error", "message": "Connection error. Please check your internet connection."}
-                return
-            except anthropic.APIStatusError as e:
-                yield {"type": "error", "message": f"API error ({e.status_code}): {e.message}"}
+            except LLMClientError as exc:
+                yield {"type": "error", "message": str(exc)}
                 return
 
-            assistant_content = response.content
+            self.conversation_history.append(
+                {
+                    "role": "assistant",
+                    "content": response.text,
+                    "tool_calls": [
+                        {"id": call.id, "name": call.name, "input": call.input}
+                        for call in response.tool_calls
+                    ],
+                }
+            )
 
-            # Append the full assistant response (including tool_use blocks)
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": assistant_content,
-            })
-
-            if response.stop_reason == "end_turn":
-                # Extract the final text and return it
-                text = ""
-                for block in assistant_content:
-                    if hasattr(block, "text"):
-                        text += block.text
-                yield {"type": "final_text", "text": text}
-                return
-
-            elif response.stop_reason == "tool_use":
-                # Extract and execute each tool call
-                tool_results = []
-
-                for block in assistant_content:
-                    if block.type != "tool_use":
-                        continue
-
-                    tool_name = block.name
-                    tool_input = block.input
-
-                    # Stream tool call info to UI
-                    event = {
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_input = tool_call.input
+                    yield {
                         "type": "tool_call",
-                        "name": tool_name,
+                        "name": tool_call.name,
                         "explanation": tool_input.get("explanation", ""),
                         "sql": tool_input.get("sql_query", ""),
                         "inputs": tool_input,
                     }
-                    yield event
 
-                    # Execute the tool
-                    result = self.executor.execute(tool_name, tool_input)
+                    result = self.executor.execute(tool_call.name, tool_input)
+                    parsed_result = self._safe_parse_json(result)
 
-                    # Check if it's a chart result
-                    try:
-                        import json
-                        parsed = json.loads(result)
-                        if isinstance(parsed, dict) and "chart_json" in parsed:
-                            yield {
-                                "type": "chart",
-                                "chart_json": parsed["chart_json"],
-                                "title": parsed.get("title", "Chart"),
-                            }
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    if isinstance(parsed_result, dict) and "chart_json" in parsed_result:
+                        yield {
+                            "type": "chart",
+                            "chart_json": parsed_result["chart_json"],
+                            "title": parsed_result.get("title", "Chart"),
+                        }
+
+                    table_data = None
+                    if isinstance(parsed_result, list):
+                        table_data = parsed_result[:50]
+                    elif isinstance(parsed_result, dict) and "results" in parsed_result and isinstance(parsed_result["results"], list):
+                        table_data = parsed_result["results"][:50]
 
                     yield {
                         "type": "tool_result",
-                        "name": tool_name,
-                        "result": result[:2000],  # truncate for display
+                        "name": tool_call.name,
+                        "result": result[:2000],
+                        "table_data": table_data,
                     }
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
+                    self.conversation_history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "content": result,
+                        }
+                    )
 
-                # Feed all tool results back to Claude
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": tool_results,
-                })
+                continue
 
-            else:
-                # Unexpected stop reason — return whatever text we have
-                text = ""
-                for block in assistant_content:
-                    if hasattr(block, "text"):
-                        text += block.text
-                yield {"type": "final_text", "text": text or f"(stopped: {response.stop_reason})"}
-                return
+            final_text = response.text.strip()
+            yield {
+                "type": "final_text",
+                "text": final_text or "(The model returned no final text.)",
+            }
+            return
 
         yield {
             "type": "error",
             "message": f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific question.",
         }
+
+    def _safe_parse_json(self, value: str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return None

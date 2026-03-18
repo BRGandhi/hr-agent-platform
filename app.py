@@ -11,6 +11,16 @@ import streamlit as st
 import plotly.io as pio
 from pathlib import Path
 
+from agent.llm_client import LLMConfig, OPENAI_COMPAT_PROVIDER
+from config import (
+    ANTHROPIC_API_KEY,
+    DEFAULT_MODEL,
+    DEFAULT_OPENAI_COMPAT_BASE_URL,
+    DEFAULT_OPENAI_COMPAT_MODEL,
+    DEFAULT_PROVIDER,
+    OPENAI_API_KEY,
+)
+
 # ── Page config (must be first Streamlit call) ─────────────────────────────
 st.set_page_config(
     page_title="HR Intelligence Platform",
@@ -250,6 +260,9 @@ def init_session_state():
         "messages": [],
         "agent": None,
         "api_key": "",
+        "provider": DEFAULT_PROVIDER,
+        "model": DEFAULT_MODEL if DEFAULT_PROVIDER == "anthropic" else DEFAULT_OPENAI_COMPAT_MODEL,
+        "base_url": "" if DEFAULT_PROVIDER == "anthropic" else DEFAULT_OPENAI_COMPAT_BASE_URL,
         "db_ready": False,
         "show_tool_calls": True,
         "db_stats": None,
@@ -316,20 +329,58 @@ with st.sidebar:
         <span class="sidebar-logo-icon">🧠</span>
         <div>
             <div class="sidebar-logo-text">HR Intelligence</div>
-            <div class="sidebar-logo-sub">Claude Opus 4.6 · Agentic</div>
+            <div class="sidebar-logo-sub">LLM Agnostic · Agentic</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     st.divider()
 
+    # Model configuration
+    st.markdown('<span class="sidebar-section-label">Model</span>', unsafe_allow_html=True)
+    selected_provider = st.selectbox(
+        "Provider",
+        options=["anthropic", OPENAI_COMPAT_PROVIDER],
+        index=0 if st.session_state.provider == "anthropic" else 1,
+        format_func=lambda value: "Anthropic" if value == "anthropic" else "OpenAI-compatible",
+        label_visibility="collapsed",
+    )
+    if selected_provider != st.session_state.provider:
+        st.session_state.provider = selected_provider
+        st.session_state.model = DEFAULT_MODEL if selected_provider == "anthropic" else DEFAULT_OPENAI_COMPAT_MODEL
+        st.session_state.base_url = "" if selected_provider == "anthropic" else DEFAULT_OPENAI_COMPAT_BASE_URL
+        st.session_state.agent = None
+
+    model_input = st.text_input(
+        "Model Name",
+        value=st.session_state.model,
+        placeholder=DEFAULT_MODEL if st.session_state.provider == "anthropic" else DEFAULT_OPENAI_COMPAT_MODEL,
+        help="Enter any provider-specific model id",
+    )
+    if model_input != st.session_state.model:
+        st.session_state.model = model_input
+        st.session_state.agent = None
+
+    if st.session_state.provider == OPENAI_COMPAT_PROVIDER:
+        base_url_input = st.text_input(
+            "Base URL",
+            value=st.session_state.base_url,
+            placeholder=DEFAULT_OPENAI_COMPAT_BASE_URL,
+            help="Examples: local Ollama, OpenRouter, Moonshot, Groq, Together, vLLM",
+        )
+        if base_url_input != st.session_state.base_url:
+            st.session_state.base_url = base_url_input
+            st.session_state.agent = None
+
+    st.divider()
+
     # API Key
-    st.markdown('<span class="sidebar-section-label">API Key</span>', unsafe_allow_html=True)
+    st.markdown('<span class="sidebar-section-label">Credentials</span>', unsafe_allow_html=True)
     api_key_input = st.text_input(
-        "Anthropic API Key",
+        "API Key",
         type="password",
-        value=st.session_state.api_key or os.getenv("ANTHROPIC_API_KEY", ""),
-        placeholder="sk-ant-...",
-        help="Get your key at console.anthropic.com",
+        value=st.session_state.api_key or (ANTHROPIC_API_KEY if st.session_state.provider == "anthropic" else OPENAI_API_KEY),
+        placeholder="Optional for local OpenAI-compatible endpoints",
+        help="Leave blank to use environment variables when available.",
         label_visibility="collapsed",
     )
     if api_key_input != st.session_state.api_key:
@@ -401,7 +452,7 @@ st.markdown("""
     <span class="app-header-icon">🧠</span>
     <div>
         <p class="app-header-title">HR Intelligence Platform</p>
-        <p class="app-header-sub">Ask anything about your workforce · Powered by Claude Opus 4.6 + SQLite</p>
+        <p class="app-header-sub">Ask anything about your workforce · Provider-agnostic agent + SQLite</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -436,8 +487,8 @@ if stats:
     """, unsafe_allow_html=True)
 
 # Warnings if not ready
-if not st.session_state.api_key:
-    st.info("Enter your Anthropic API key in the sidebar to get started.", icon="🔑")
+if st.session_state.provider == "anthropic" and not (st.session_state.api_key or ANTHROPIC_API_KEY):
+    st.info("Enter an Anthropic API key in the sidebar or set ANTHROPIC_API_KEY.", icon="🔑")
 
 if not st.session_state.db_ready:
     st.error("Database not found. Run `python setup_db.py` in the hr_agent_platform folder.")
@@ -446,11 +497,21 @@ if not st.session_state.db_ready:
 
 # ── Agent initialization ───────────────────────────────────────────────────
 def get_agent():
-    if st.session_state.agent is None and st.session_state.api_key:
+    llm_config = LLMConfig(
+        provider=st.session_state.provider,
+        model=st.session_state.model,
+        api_key=st.session_state.api_key or (ANTHROPIC_API_KEY if st.session_state.provider == "anthropic" else OPENAI_API_KEY),
+        base_url=st.session_state.base_url,
+    )
+
+    if st.session_state.agent is None:
         from database.connector import HRDatabase
         from agent.orchestrator import HRAgent
         db = HRDatabase()
-        st.session_state.agent = HRAgent(api_key=st.session_state.api_key, db=db)
+        st.session_state.agent = HRAgent(llm_config=llm_config, db=db)
+    else:
+        st.session_state.agent.update_llm_config(llm_config)
+
     return st.session_state.agent
 
 
@@ -504,13 +565,13 @@ def handle_question(user_input: str):
     if not user_input.strip():
         return
 
-    if not st.session_state.api_key:
-        st.error("Please enter your Anthropic API key in the sidebar first.")
+    if st.session_state.provider == "anthropic" and not (st.session_state.api_key or ANTHROPIC_API_KEY):
+        st.error("Please enter an Anthropic API key in the sidebar first.")
         return
 
     agent = get_agent()
     if agent is None:
-        st.error("Could not initialize agent. Check your API key.")
+        st.error("Could not initialize agent. Check your provider settings.")
         return
 
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -543,12 +604,8 @@ def handle_question(user_input: str):
                         )
 
                 elif etype == "tool_result":
-                    try:
-                        parsed = json.loads(event["result"])
-                        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
-                            table_data = parsed
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    if event.get("table_data"):
+                        table_data = event["table_data"]
 
                 elif etype == "chart":
                     charts_collected.append({
