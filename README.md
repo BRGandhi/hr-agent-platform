@@ -2,15 +2,24 @@
 
 An agentic AI assistant for HR analytics with an LLM-agnostic orchestration layer. Ask questions about your workforce in plain English and the agent will write SQL, query the database, calculate metrics, generate Plotly charts, and stream results to the UI.
 
+The platform is now governed by default:
+- it only responds to HR insights, workforce analytics, HR policy, and people-data questions
+- out-of-scope prompts are refused before model execution
+- SSO-linked users are mapped to role-based department and metric access
+- retrieved policy/schema context plus user conversation memory are added to each turn
+- top-level portal metrics are scoped to the signed-in user's access
+
 It now supports:
 - Anthropic models
 - OpenAI-compatible APIs
-- local models such as Llama through Ollama / vLLM
+- local models such as Llama through Ollama or vLLM
 - hosted OpenAI-compatible providers, including Kimi-compatible endpoints
 - an SSO-style sign-in layer in front of the web app
+- role-based access from a dedicated access-control database
+- a context and memory layer backed by SQLite
 
 Two frontends, one backend:
-- FastAPI + vanilla JS frontend
+- FastAPI plus vanilla JS frontend
 - legacy Streamlit frontend
 
 ## Quick Start
@@ -73,6 +82,8 @@ FastAPI server.py
         v
 HRAgent orchestrator.py
   -> provider adapter (Anthropic or OpenAI-compatible)
+  -> access control enforcement
+  -> context and memory retrieval
   -> ToolExecutor
       -> query_hr_database
       -> calculate_metrics
@@ -81,12 +92,16 @@ HRAgent orchestrator.py
         |
         v
 SQLite HR database
+SQLite access-control database
+SQLite context and memory database
 ```
 
 The agent loop is provider-agnostic:
 1. The selected model receives the conversation history plus tool schemas.
-2. The model either requests tools or returns a final answer.
-3. Tool results are appended to normalized conversation history and the loop repeats.
+2. Access controls check that the question and any generated SQL stay within the signed-in user's scope.
+3. Retrieved HR policies, schema notes, and prior-user memory are injected into the system context.
+4. The model either requests tools or returns a final answer.
+5. Tool results are appended to normalized conversation history and the loop repeats.
 
 ## Configuration
 
@@ -94,23 +109,27 @@ The agent loop is provider-agnostic:
 |---|---|---|
 | `DEFAULT_LLM_PROVIDER` | `anthropic` | `anthropic` or `openai-compatible` |
 | `DEFAULT_LLM_MODEL` | `claude-opus-4-6` | Default Anthropic model |
-| `ANTHROPIC_API_KEY` | — | Anthropic credential |
-| `OPENAI_API_KEY` | — | Credential for OpenAI-compatible providers |
+| `ANTHROPIC_API_KEY` | empty | Anthropic credential |
+| `OPENAI_API_KEY` | empty | Credential for OpenAI-compatible providers |
 | `DEFAULT_OPENAI_COMPAT_MODEL` | `llama3.1:8b` | Default OpenAI-compatible model |
 | `DEFAULT_OPENAI_COMPAT_BASE_URL` | `http://localhost:11434/v1` | Default OpenAI-compatible endpoint |
-| `MAX_AGENT_ITERATIONS` | `10` | Max tool call loop depth |
 | `SESSION_TTL_MINUTES` | `120` | Idle-session cleanup timeout |
 | `AUTH_REQUIRED` | `true` | Require sign-in before loading the app |
 | `DEV_SSO_ENABLED` | `true` | Enables local demo SSO session flow |
 | `SSO_PROVIDERS` | `Microsoft,Google,Okta` | Sign-in buttons shown on the auth page |
 | `PORT` | `8000` | FastAPI server port |
-| `APP_PASSWORD` | — | Optional Streamlit password gate |
+| `APP_PASSWORD` | empty | Optional Streamlit password gate |
+
+Runtime-created stores:
+- `access_control.db`: maps SSO-linked emails to role, department scope, allowed metrics, and document tags
+- `context_store.db`: stores recent user memory and HR policy/schema documents used for retrieval
 
 ## Security Notes
 
 - SQL is validated as read-only before execution.
+- SQL is also checked against role-based metric access and department scope.
 - API keys are never committed.
-- The JS frontend no longer stores API keys in `localStorage`.
+- The JS frontend does not store API keys in `localStorage`.
 - Sessions are still in-memory, but idle sessions are cleaned up automatically.
 
 ## Project Structure

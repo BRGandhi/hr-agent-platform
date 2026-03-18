@@ -127,4 +127,30 @@ TOOLS = [
             "required": ["focus_area"],
         },
     },
+    {
+        "name": "generate_standard_report",
+        "description": (
+            "Generate a scoped employee-level standard HR report for the signed-in user. "
+            "Use this when the user asks for a standard report, employee-level report, name-by-name report, "
+            "headcount roster, active workforce list, or attrition roster. "
+            "Supported report types are active headcount and attrition. "
+            "The source dataset does not contain real employee names, so the report returns an employee label "
+            "derived from EmployeeNumber."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "enum": ["active_headcount", "attrition"],
+                    "description": "Which standard report to generate",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Brief explanation of why this report is being generated",
+                },
+            },
+            "required": ["report_type", "explanation"],
+        },
+    },
 ]

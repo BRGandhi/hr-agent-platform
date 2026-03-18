@@ -1,13 +1,15 @@
 """
-Tool executor: bridges Claude's tool requests to actual Python/SQL operations.
-Claude says "call tool X with params Y" — this module does the actual work.
+Tool executor: bridges model tool requests to actual Python/SQL operations.
 """
 
+from __future__ import annotations
+
 import json
+
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
+from database.access_control import AccessProfile
 from database.connector import HRDatabase
 from utils.safety import validate_sql
 
@@ -16,49 +18,41 @@ class ToolExecutor:
     def __init__(self, db: HRDatabase):
         self.db = db
 
-    def execute(self, tool_name: str, tool_input: dict) -> str:
-        """
-        Dispatch a tool call to the appropriate handler.
-        Returns a string result to send back to Claude.
-        """
+    def execute(self, tool_name: str, tool_input: dict, access_profile: AccessProfile | None = None) -> str:
         try:
             if tool_name == "query_hr_database":
-                return self._query_database(tool_input)
-            elif tool_name == "calculate_metrics":
+                return self._query_database(tool_input, access_profile)
+            if tool_name == "calculate_metrics":
                 return self._calculate_metrics(tool_input)
-            elif tool_name == "create_visualization":
+            if tool_name == "create_visualization":
                 return self._create_visualization(tool_input)
-            elif tool_name == "get_attrition_insights":
-                return self._get_attrition_insights(tool_input)
-            else:
-                return f"Error: Unknown tool '{tool_name}'"
-        except Exception as e:
-            return f"Tool execution error: {str(e)}"
+            if tool_name == "get_attrition_insights":
+                return self._get_attrition_insights(tool_input, access_profile)
+            if tool_name == "generate_standard_report":
+                return self._generate_standard_report(tool_input, access_profile)
+            return f"Error: Unknown tool '{tool_name}'"
+        except Exception as exc:
+            return f"Tool execution error: {exc}"
 
-    # ------------------------------------------------------------------ #
-    #  Tool 1: Query HR Database                                           #
-    # ------------------------------------------------------------------ #
-    def _query_database(self, inputs: dict) -> str:
+    def _query_database(self, inputs: dict, access_profile: AccessProfile | None) -> str:
         sql = inputs.get("sql_query", "").strip()
 
         is_safe, result = validate_sql(sql)
         if not is_safe:
             return f"SQL rejected by safety validator: {result}"
 
-        safe_sql = result  # validator may have appended LIMIT
-        try:
-            rows = self.db.execute_query(safe_sql)
-        except Exception as e:
-            return f"Database error: {str(e)}"
+        safe_sql = result
+        if access_profile:
+            allowed, reason = access_profile.is_sql_allowed(safe_sql)
+            if not allowed:
+                return reason
 
+        rows = self.db.execute_query(safe_sql, access_profile=access_profile)
         if not rows:
             return "Query returned 0 rows."
 
         return json.dumps(rows, default=str)
 
-    # ------------------------------------------------------------------ #
-    #  Tool 2: Calculate Metrics                                           #
-    # ------------------------------------------------------------------ #
     def _calculate_metrics(self, inputs: dict) -> str:
         raw_data = inputs.get("data", "[]")
         operation = inputs.get("operation", "")
@@ -73,59 +67,29 @@ class ToolExecutor:
 
         df = pd.DataFrame(data)
         results = {}
-
         op_lower = operation.lower()
 
-        # Attrition rate calculation
         if "attrition" in op_lower and ("rate" in op_lower or "percent" in op_lower):
             if "Attrition" in df.columns:
-                for col in df.columns:
-                    if col == "Attrition":
-                        continue
-                    if df[col].nunique() < 20:  # groupable column
-                        group = df.groupby(col)["Attrition"].apply(
-                            lambda x: round(100 * (x == "Yes").sum() / len(x), 1)
-                        ).reset_index()
-                        group.columns = [col, "AttritionRate_pct"]
-                        results[f"attrition_rate_by_{col}"] = group.to_dict(orient="records")
-            if not results:
-                yes = (df.get("Attrition", pd.Series()) == "Yes").sum() if "Attrition" in df.columns else 0
+                yes = (df["Attrition"] == "Yes").sum()
                 total = len(df)
                 results["attrition_rate"] = {
                     "attrited": int(yes),
                     "total": total,
                     "rate_pct": round(100 * yes / total, 1) if total > 0 else 0,
                 }
-
-        # Percentage breakdown
         elif "percentage" in op_lower or "breakdown" in op_lower or "distribution" in op_lower:
             for col in df.columns:
                 if df[col].dtype == object or df[col].nunique() < 15:
                     counts = df[col].value_counts(normalize=True).mul(100).round(1)
                     results[f"{col}_distribution_pct"] = counts.to_dict()
-
-        # Top N ranking
-        elif "top" in op_lower or "rank" in op_lower:
-            numeric_cols = df.select_dtypes(include="number").columns.tolist()
-            if numeric_cols:
-                sort_col = numeric_cols[-1]
-                top = df.nlargest(min(10, len(df)), sort_col)
-                results["top_ranked"] = top.to_dict(orient="records")
-
-        # Summary statistics (default fallback)
         else:
             numeric = df.select_dtypes(include="number")
             if not numeric.empty:
                 results["summary_stats"] = numeric.describe().round(2).to_dict()
-            categorical = df.select_dtypes(include="object")
-            for col in categorical.columns[:3]:
-                results[f"{col}_value_counts"] = df[col].value_counts().head(10).to_dict()
 
         return json.dumps(results, default=str)
 
-    # ------------------------------------------------------------------ #
-    #  Tool 3: Create Visualization                                        #
-    # ------------------------------------------------------------------ #
     def _create_visualization(self, inputs: dict) -> str:
         chart_type = inputs.get("chart_type", "bar")
         raw_data = inputs.get("data", "[]")
@@ -140,152 +104,76 @@ class ToolExecutor:
             return json.dumps({"error": "Could not parse chart data JSON"})
 
         if not data:
-            return json.dumps({"error": "Empty data — cannot create chart"})
+            return json.dumps({"error": "Empty data - cannot create chart"})
 
         df = pd.DataFrame(data)
-
-        # Convert numeric strings to numbers
         for col in [x_col, y_col]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="ignore")
 
-        PALETTE = [
-            "#6366F1", "#10B981", "#F59E0B", "#EF4444",
-            "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6",
-        ]
+        palette = ["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#3B82F6", "#8B5CF6"]
 
-        try:
-            if chart_type == "bar":
-                fig = px.bar(df, x=x_col, y=y_col, title=title,
-                             color=color_col, text_auto=True,
-                             color_discrete_sequence=PALETTE)
-            elif chart_type == "horizontal_bar":
-                fig = px.bar(df, x=y_col, y=x_col, orientation="h", title=title,
-                             color=color_col, text_auto=True,
-                             color_discrete_sequence=PALETTE)
-            elif chart_type == "pie":
-                fig = px.pie(df, names=x_col, values=y_col, title=title,
-                             color_discrete_sequence=PALETTE)
-            elif chart_type == "histogram":
-                fig = px.histogram(df, x=x_col, title=title,
-                                   color=color_col,
-                                   color_discrete_sequence=PALETTE)
-            elif chart_type == "scatter":
-                fig = px.scatter(df, x=x_col, y=y_col, title=title,
-                                 color=color_col, hover_data=df.columns.tolist(),
-                                 color_discrete_sequence=PALETTE)
-            elif chart_type == "line":
-                fig = px.line(df, x=x_col, y=y_col, title=title,
-                              color=color_col, markers=True,
-                              color_discrete_sequence=PALETTE)
-            elif chart_type == "box":
-                fig = px.box(df, x=x_col, y=y_col, title=title,
-                             color=color_col,
-                             color_discrete_sequence=PALETTE)
-            else:
-                fig = px.bar(df, x=x_col, y=y_col, title=title,
-                             color_discrete_sequence=PALETTE)
+        if chart_type == "bar":
+            fig = px.bar(df, x=x_col, y=y_col, title=title, color=color_col, text_auto=True, color_discrete_sequence=palette)
+        elif chart_type == "horizontal_bar":
+            fig = px.bar(df, x=y_col, y=x_col, orientation="h", title=title, color=color_col, text_auto=True, color_discrete_sequence=palette)
+        elif chart_type == "pie":
+            fig = px.pie(df, names=x_col, values=y_col, title=title, color_discrete_sequence=palette)
+        elif chart_type == "line":
+            fig = px.line(df, x=x_col, y=y_col, title=title, color=color_col, markers=True, color_discrete_sequence=palette)
+        else:
+            fig = px.bar(df, x=x_col, y=y_col, title=title, color=color_col, text_auto=True, color_discrete_sequence=palette)
 
-            # ── Professional chart theme ──────────────────────────────
-            PALETTE = [
-                "#6366F1", "#10B981", "#F59E0B", "#EF4444",
-                "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6",
-            ]
-            fig.update_layout(
-                plot_bgcolor="#FFFFFF",
-                paper_bgcolor="#FFFFFF",
-                font=dict(family="Inter, sans-serif", color="#1E293B"),
-                title_font=dict(size=17, color="#1E293B", family="Inter, sans-serif"),
-                title_x=0,
-                legend=dict(
-                    bgcolor="rgba(0,0,0,0)",
-                    bordercolor="rgba(0,0,0,0)",
-                    font=dict(size=12),
-                ),
-                margin=dict(t=52, b=40, l=16, r=16),
-                xaxis=dict(
-                    showgrid=True,
-                    gridcolor="#F1F5F9",
-                    linecolor="#E2E8F0",
-                    tickfont=dict(size=12, color="#64748B"),
-                    title_font=dict(size=13, color="#64748B"),
-                    zeroline=False,
-                ),
-                yaxis=dict(
-                    showgrid=True,
-                    gridcolor="#F1F5F9",
-                    linecolor="#E2E8F0",
-                    tickfont=dict(size=12, color="#64748B"),
-                    title_font=dict(size=13, color="#64748B"),
-                    zeroline=False,
-                ),
-                colorway=PALETTE,
-            )
-            # Round bar corners and clean up traces
-            if chart_type in ("bar", "horizontal_bar"):
-                fig.update_traces(
-                    marker_line_width=0,
-                    textfont=dict(size=11, color="#1E293B"),
-                    textposition="outside",
-                )
-            elif chart_type == "pie":
-                fig.update_traces(
-                    textposition="inside",
-                    textinfo="percent+label",
-                    hole=0.35,
-                    marker=dict(line=dict(color="#FFFFFF", width=2)),
-                )
-            elif chart_type == "scatter":
-                fig.update_traces(marker=dict(size=8, opacity=0.8, line=dict(width=1, color="white")))
-            elif chart_type == "line":
-                fig.update_traces(line=dict(width=2.5), marker=dict(size=7))
+        fig.update_layout(
+            plot_bgcolor="#FFFFFF",
+            paper_bgcolor="#FFFFFF",
+            font=dict(family="Inter, sans-serif", color="#1E293B"),
+            title_x=0,
+            margin=dict(t=52, b=40, l=16, r=16),
+        )
 
-            chart_json = fig.to_json()
-            return json.dumps({"chart_json": chart_json, "title": title})
+        return json.dumps({"chart_json": fig.to_json(), "title": title})
 
-        except Exception as e:
-            return json.dumps({"error": f"Chart creation failed: {str(e)}"})
-
-    # ------------------------------------------------------------------ #
-    #  Tool 4: Get Attrition Insights                                      #
-    # ------------------------------------------------------------------ #
-    def _get_attrition_insights(self, inputs: dict) -> str:
+    def _get_attrition_insights(self, inputs: dict, access_profile: AccessProfile | None) -> str:
         focus = inputs.get("focus_area", "overall_summary")
+        allowed_metrics = set(access_profile.allowed_metrics) if access_profile else {"all"}
+
+        if access_profile and "all" not in allowed_metrics and "attrition" not in allowed_metrics:
+            return json.dumps({"error": "Attrition insights are outside your role-based access"})
+
+        if focus == "by_demographics" and access_profile and "all" not in allowed_metrics and "demographics" not in allowed_metrics:
+            return json.dumps({"error": "Demographic insights are outside your role-based access"})
+        if focus == "by_satisfaction" and access_profile and "all" not in allowed_metrics and "satisfaction" not in allowed_metrics:
+            return json.dumps({"error": "Satisfaction insights are outside your role-based access"})
+        if focus == "by_compensation" and access_profile and "all" not in allowed_metrics and "compensation" not in allowed_metrics:
+            return json.dumps({"error": "Compensation insights are outside your role-based access"})
 
         queries = {
             "overall_summary": """
                 SELECT
                     COUNT(*) as TotalEmployees,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as TotalAttrited,
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct,
-                    ROUND(AVG(Age),1) as AvgAge,
-                    ROUND(AVG(MonthlyIncome),0) as AvgMonthlyIncome,
-                    ROUND(AVG(YearsAtCompany),1) as AvgTenureYears,
-                    SUM(CASE WHEN OverTime='Yes' THEN 1 ELSE 0 END) as OverTimeWorkers
+                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees
             """,
             "by_department": """
                 SELECT Department,
                     COUNT(*) as Total,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as Attrited,
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct,
-                    ROUND(AVG(MonthlyIncome),0) as AvgIncome
+                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees GROUP BY Department ORDER BY AttritionRate_pct DESC
             """,
             "by_job_role": """
                 SELECT JobRole,
                     COUNT(*) as Total,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as Attrited,
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct,
-                    ROUND(AVG(MonthlyIncome),0) as AvgIncome,
-                    ROUND(AVG(JobSatisfaction),1) as AvgJobSatisfaction
+                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees GROUP BY JobRole ORDER BY AttritionRate_pct DESC
             """,
             "by_demographics": """
                 SELECT Gender, MaritalStatus,
                     COUNT(*) as Total,
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct,
-                    ROUND(AVG(Age),1) as AvgAge
+                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees GROUP BY Gender, MaritalStatus ORDER BY AttritionRate_pct DESC
             """,
             "by_satisfaction": """
@@ -305,8 +193,7 @@ class ToolExecutor:
                         ELSE 'High (>$10K)'
                     END as IncomeBand,
                     COUNT(*) as Total,
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct,
-                    ROUND(AVG(MonthlyIncome),0) as AvgIncome
+                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees
                 GROUP BY IncomeBand ORDER BY AttritionRate_pct DESC
             """,
@@ -316,33 +203,70 @@ class ToolExecutor:
                     COUNT(*) as AffectedEmployees,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
                 FROM employees WHERE OverTime='Yes'
-                UNION ALL
-                SELECT 'SingleMaritalStatus', COUNT(*),
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1)
-                FROM employees WHERE MaritalStatus='Single'
-                UNION ALL
-                SELECT 'LowJobSatisfaction(1)', COUNT(*),
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1)
-                FROM employees WHERE JobSatisfaction=1
-                UNION ALL
-                SELECT 'LowEnvironmentSatisfaction(1)', COUNT(*),
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1)
-                FROM employees WHERE EnvironmentSatisfaction=1
-                UNION ALL
-                SELECT 'LowWorkLifeBalance(1)', COUNT(*),
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1)
-                FROM employees WHERE WorkLifeBalance=1
-                UNION ALL
-                SELECT 'FrequentTraveler', COUNT(*),
-                    ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1)
-                FROM employees WHERE BusinessTravel='Travel_Frequently'
                 ORDER BY AttritionRate_pct DESC
             """,
         }
 
         sql = queries.get(focus, queries["overall_summary"])
-        try:
-            rows = self.db.execute_query(sql.strip())
-            return json.dumps({"focus_area": focus, "results": rows}, default=str)
-        except Exception as e:
-            return json.dumps({"error": str(e)})
+        rows = self.db.execute_query(sql.strip(), access_profile=access_profile)
+        return json.dumps({"focus_area": focus, "results": rows}, default=str)
+
+    def _generate_standard_report(self, inputs: dict, access_profile: AccessProfile | None) -> str:
+        report_type = inputs.get("report_type", "").strip().lower()
+        explanation = inputs.get("explanation", "").strip()
+        allowed_metrics = set(access_profile.allowed_metrics) if access_profile else {"all"}
+
+        if report_type == "active_headcount":
+            if access_profile and "all" not in allowed_metrics and "headcount" not in allowed_metrics:
+                return json.dumps({"error": "Active headcount reports are outside your role-based access"})
+            report_name = "Active Headcount Report"
+            sql = """
+                SELECT
+                    'Employee ' || EmployeeNumber AS EmployeeLabel,
+                    EmployeeNumber,
+                    Department,
+                    JobRole,
+                    JobLevel,
+                    BusinessTravel,
+                    OverTime,
+                    Attrition
+                FROM employees
+                WHERE Attrition = 'No'
+                ORDER BY Department, JobRole, EmployeeNumber
+            """
+        elif report_type == "attrition":
+            if access_profile and "all" not in allowed_metrics and "attrition" not in allowed_metrics:
+                return json.dumps({"error": "Attrition reports are outside your role-based access"})
+            report_name = "Attrition Report"
+            sql = """
+                SELECT
+                    'Employee ' || EmployeeNumber AS EmployeeLabel,
+                    EmployeeNumber,
+                    Department,
+                    JobRole,
+                    JobLevel,
+                    BusinessTravel,
+                    OverTime,
+                    Attrition
+                FROM employees
+                WHERE Attrition = 'Yes'
+                ORDER BY Department, JobRole, EmployeeNumber
+            """
+        else:
+            return json.dumps({"error": "Unsupported report type"})
+
+        rows = self.db.execute_query(sql.strip(), access_profile=access_profile)
+        return json.dumps(
+            {
+                "report_name": report_name,
+                "report_type": report_type,
+                "scope_name": access_profile.scope_name if access_profile else "Enterprise",
+                "row_count": len(rows),
+                "note": (
+                    "Employee labels are derived from EmployeeNumber because the demo dataset does not include real employee names."
+                ),
+                "explanation": explanation,
+                "results": rows,
+            },
+            default=str,
+        )

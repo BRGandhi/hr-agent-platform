@@ -33,7 +33,9 @@ from config import (
     SESSION_TTL_MINUTES,
     SSO_PROVIDERS,
 )
+from database.access_control import AccessControlStore
 from database.connector import HRDatabase
+from database.context_store import ContextStore
 
 app = FastAPI(title="HR Intelligence Platform")
 
@@ -63,6 +65,8 @@ class AuthState:
 _sessions: dict[str, SessionState] = {}
 _auth_sessions: dict[str, AuthState] = {}
 DB = HRDatabase()
+ACCESS_STORE = AccessControlStore()
+CONTEXT_STORE = ContextStore()
 
 
 class ChatRequest(BaseModel):
@@ -82,23 +86,21 @@ class LoginRequest(BaseModel):
     provider: str
 
 
+class ContextDocumentRequest(BaseModel):
+    title: str
+    content: str
+    tags: list[str]
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _cleanup_expired_items():
     cutoff = _now() - timedelta(minutes=SESSION_TTL_MINUTES)
-
-    expired_agent_sessions = [
-        session_id for session_id, session in _sessions.items() if session.last_accessed < cutoff
-    ]
-    for session_id in expired_agent_sessions:
+    for session_id in [key for key, session in _sessions.items() if session.last_accessed < cutoff]:
         _sessions.pop(session_id, None)
-
-    expired_auth_sessions = [
-        session_id for session_id, session in _auth_sessions.items() if session.last_accessed < cutoff
-    ]
-    for session_id in expired_auth_sessions:
+    for session_id in [key for key, session in _auth_sessions.items() if session.last_accessed < cutoff]:
         _auth_sessions.pop(session_id, None)
 
 
@@ -114,25 +116,21 @@ def _build_llm_config(req: ChatRequest) -> LLMConfig:
         base_url = ""
         api_key = (req.api_key or ANTHROPIC_API_KEY).strip()
 
-    return LLMConfig(
-        provider=provider,
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-    )
+    return LLMConfig(provider=provider, model=model, api_key=api_key, base_url=base_url)
 
 
 def _get_or_create_session(session_id: str, llm_config: LLMConfig) -> HRAgent:
     _cleanup_expired_items()
     session = _sessions.get(session_id)
-
     if session is None:
-        session = SessionState(agent=HRAgent(llm_config=llm_config, db=DB), last_accessed=_now())
+        session = SessionState(
+            agent=HRAgent(llm_config=llm_config, db=DB, context_store=CONTEXT_STORE),
+            last_accessed=_now(),
+        )
         _sessions[session_id] = session
     else:
         session.agent.update_llm_config(llm_config)
         session.last_accessed = _now()
-
     return session.agent
 
 
@@ -142,7 +140,7 @@ def _create_demo_user(provider: str) -> dict:
         "name": f"{normalized} Demo User",
         "email": f"demo.{normalized.lower()}@hr-intelligence.local",
         "provider": normalized,
-        "role": "HR Business Partner",
+        "role": "Assigned via access database",
     }
 
 
@@ -159,11 +157,9 @@ def _get_auth_user(request: Request) -> dict | None:
     auth_token = request.cookies.get(AUTH_COOKIE_NAME)
     if not auth_token:
         return None
-
     auth_session = _auth_sessions.get(auth_token)
-    if auth_session is None:
+    if not auth_session:
         return None
-
     auth_session.last_accessed = _now()
     return auth_session.user
 
@@ -173,6 +169,11 @@ def _require_auth(request: Request) -> dict:
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     return user
+
+
+def _current_access_profile(request: Request):
+    user = _require_auth(request)
+    return ACCESS_STORE.get_profile(user["email"])
 
 
 @app.get("/api/config")
@@ -219,23 +220,15 @@ def get_auth_session(request: Request):
 @app.post("/api/auth/login")
 def login_with_sso(req: LoginRequest, response: Response):
     provider = req.provider.strip().lower()
-    configured_providers = {provider_name.lower() for provider_name in SSO_PROVIDERS}
+    allowed = {provider_name.lower() for provider_name in SSO_PROVIDERS}
 
-    if provider not in configured_providers:
+    if provider not in allowed:
         raise HTTPException(status_code=400, detail="Unsupported identity provider")
-
     if not DEV_SSO_ENABLED:
-        raise HTTPException(
-            status_code=501,
-            detail="Real SSO is not configured yet. Enable DEV_SSO_ENABLED or add an OIDC provider.",
-        )
+        raise HTTPException(status_code=501, detail="Real OIDC/SAML is not configured yet.")
 
     auth_token = secrets.token_urlsafe(32)
-    _auth_sessions[auth_token] = AuthState(
-        user=_create_demo_user(provider),
-        last_accessed=_now(),
-    )
-
+    _auth_sessions[auth_token] = AuthState(user=_create_demo_user(provider), last_accessed=_now())
     response.set_cookie(
         AUTH_COOKIE_NAME,
         auth_token,
@@ -256,26 +249,49 @@ def logout(request: Request, response: Response):
     return {"ok": True}
 
 
+@app.get("/api/me/access")
+def get_access_summary(request: Request):
+    user = _require_auth(request)
+    profile = ACCESS_STORE.get_profile(user["email"])
+    return {"user": user, "access_profile": profile.summary()}
+
+
+@app.get("/api/me/history")
+def get_recent_history(request: Request):
+    user = _require_auth(request)
+    return {"questions": CONTEXT_STORE.recent_questions(user["email"])}
+
+
+@app.get("/api/context/documents")
+def list_context_documents(request: Request):
+    _require_auth(request)
+    return {"documents": CONTEXT_STORE.list_documents()}
+
+
+@app.post("/api/context/documents")
+def add_context_document(req: ContextDocumentRequest, request: Request):
+    _require_auth(request)
+    return CONTEXT_STORE.add_document(req.title, req.content, req.tags)
+
+
 @app.get("/api/stats")
 def get_stats(request: Request):
-    _require_auth(request)
-    try:
-        stats = DB.get_table_stats()
-        return JSONResponse(stats)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    profile = _current_access_profile(request)
+    stats = DB.get_table_stats(access_profile=profile)
+    stats["access_profile"] = profile.summary()
+    return JSONResponse(stats)
 
 
 @app.post("/api/reset")
 def reset_session(req: ResetRequest, request: Request):
-    _require_auth(request)
+    _current_access_profile(request)
     _sessions.pop(req.session_id, None)
     return {"ok": True}
 
 
 @app.post("/api/chat")
 async def chat_sse(req: ChatRequest, request: Request):
-    _require_auth(request)
+    access_profile = _current_access_profile(request)
 
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Empty message")
@@ -293,7 +309,7 @@ async def chat_sse(req: ChatRequest, request: Request):
 
         try:
             agent = _get_or_create_session(session_id, llm_config)
-            for event in agent.chat(req.message):
+            for event in agent.chat(req.message, access_profile=access_profile):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
@@ -303,10 +319,7 @@ async def chat_sse(req: ChatRequest, request: Request):
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

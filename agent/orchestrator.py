@@ -1,5 +1,5 @@
 """
-The agent orchestrator implements a provider-agnostic Think → Act → Observe loop.
+Provider-agnostic Think -> Act -> Observe loop with scope, access, and context enforcement.
 """
 
 from __future__ import annotations
@@ -8,22 +8,24 @@ import json
 from typing import Generator
 
 from agent.llm_client import LLMClientError, LLMConfig, create_llm_client
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import build_system_prompt
 from agent.tool_executor import ToolExecutor
 from agent.tools import TOOLS
 from config import MAX_AGENT_ITERATIONS
+from database.access_control import AccessProfile
 from database.connector import HRDatabase
+from database.context_store import ContextStore
 
 
 class HRAgent:
-    def __init__(self, llm_config: LLMConfig, db: HRDatabase):
+    def __init__(self, llm_config: LLMConfig, db: HRDatabase, context_store: ContextStore):
         self.llm_config = llm_config.normalized()
         self.client = create_llm_client(self.llm_config)
         self.executor = ToolExecutor(db)
+        self.context_store = context_store
         self.conversation_history: list[dict] = []
 
     def reset(self):
-        """Clear conversation history to start a new session."""
         self.conversation_history = []
 
     def update_llm_config(self, llm_config: LLMConfig):
@@ -32,19 +34,25 @@ class HRAgent:
             self.llm_config = normalized
             self.client = create_llm_client(normalized)
 
-    def chat(self, user_message: str) -> Generator[dict, None, None]:
-        """
-        Send a user message and run the agent loop.
+    def chat(self, user_message: str, access_profile: AccessProfile) -> Generator[dict, None, None]:
+        allowed, reason = access_profile.can_access_question(user_message)
+        if not allowed:
+            yield {"type": "final_text", "text": reason}
+            self.context_store.remember(access_profile.email, user_message, reason)
+            return
 
-        Yields event dicts for the UI:
-          {"type": "tool_call",   "name": str, "explanation": str, "sql": str}
-          {"type": "tool_result", "name": str, "result": str, "table_data": list | dict | None}
-          {"type": "chart",       "chart_json": str, "title": str}
-          {"type": "final_text",  "text": str}
-          {"type": "error",       "message": str}
-        """
+        recent_memory = self.context_store.recent_memory(access_profile.email)
+        context_documents = self.context_store.search_documents(
+            user_message,
+            access_profile.allowed_doc_tags,
+        )
+        system_prompt = build_system_prompt(
+            access_profile=access_profile.summary(),
+            recent_memory=recent_memory,
+            context_documents=context_documents,
+        )
+
         self.conversation_history.append({"role": "user", "content": user_message})
-
         iteration = 0
 
         while iteration < MAX_AGENT_ITERATIONS:
@@ -52,7 +60,7 @@ class HRAgent:
 
             try:
                 response = self.client.create_response(
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     tools=TOOLS,
                     messages=self.conversation_history,
                 )
@@ -82,7 +90,7 @@ class HRAgent:
                         "inputs": tool_input,
                     }
 
-                    result = self.executor.execute(tool_call.name, tool_input)
+                    result = self.executor.execute(tool_call.name, tool_input, access_profile=access_profile)
                     parsed_result = self._safe_parse_json(result)
 
                     if isinstance(parsed_result, dict) and "chart_json" in parsed_result:
@@ -93,16 +101,19 @@ class HRAgent:
                         }
 
                     table_data = None
+                    table_title = tool_call.name
                     if isinstance(parsed_result, list):
                         table_data = parsed_result[:50]
                     elif isinstance(parsed_result, dict) and "results" in parsed_result and isinstance(parsed_result["results"], list):
                         table_data = parsed_result["results"][:50]
+                        table_title = parsed_result.get("report_name") or parsed_result.get("focus_area") or tool_call.name
 
                     yield {
                         "type": "tool_result",
                         "name": tool_call.name,
                         "result": result[:2000],
                         "table_data": table_data,
+                        "title": table_title,
                     }
 
                     self.conversation_history.append(
@@ -116,17 +127,14 @@ class HRAgent:
 
                 continue
 
-            final_text = response.text.strip()
-            yield {
-                "type": "final_text",
-                "text": final_text or "(The model returned no final text.)",
-            }
+            final_text = response.text.strip() or "(The model returned no final text.)"
+            self.context_store.remember(access_profile.email, user_message, final_text)
+            yield {"type": "final_text", "text": final_text}
             return
 
-        yield {
-            "type": "error",
-            "message": f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific question.",
-        }
+        fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
+        self.context_store.remember(access_profile.email, user_message, fallback)
+        yield {"type": "error", "message": fallback}
 
     def _safe_parse_json(self, value: str):
         try:

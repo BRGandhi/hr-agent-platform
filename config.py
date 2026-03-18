@@ -8,6 +8,8 @@ BASE_DIR = Path(__file__).parent
 
 # Database
 DB_PATH = str(BASE_DIR / "hr_data.db")
+ACCESS_DB_PATH = str(BASE_DIR / "access_control.db")
+CONTEXT_DB_PATH = str(BASE_DIR / "context_store.db")
 CSV_PATH = str(Path(__file__).parent.parent / "WA_Fn-UseC_-HR-Employee-Attrition.csv")
 
 # LLM providers

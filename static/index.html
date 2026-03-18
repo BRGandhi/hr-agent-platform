@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>HR Intelligence Platform</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+  <title>HR Insights Platform</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -16,26 +15,35 @@
     <div class="auth-backdrop"></div>
     <div class="auth-card">
       <div class="auth-brand">
-        <div class="auth-brand-icon">🧠</div>
+        <div class="auth-brand-icon">
+          <svg class="coffee-svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <path class="coffee-steam" d="M22 14C19 18 19 21 22 25" />
+            <path class="coffee-steam" d="M32 11C29 16 29 20 32 25" />
+            <path class="coffee-steam" d="M42 14C39 18 39 21 42 25" />
+            <path class="coffee-cup" d="M15 26H43V37C43 45 36 51 28 51H27C20 51 15 46 15 39V26Z" />
+            <path class="coffee-handle" d="M43 29H47C51 29 54 32 54 36C54 40 51 43 47 43H43" />
+            <path class="coffee-base" d="M18 55H45" />
+          </svg>
+        </div>
         <div>
           <div class="auth-brand-kicker">Enterprise Access</div>
           <h1 class="auth-title">Sign In With Your Company SSO</h1>
-          <p class="auth-sub">Access workforce analytics, agentic reporting, and HR insights through a secure sign-in experience.</p>
+          <p class="auth-sub">Access workforce analytics, role-based HR reporting, memory-aware insights, and governed people intelligence through a secure sign-in experience.</p>
         </div>
       </div>
 
       <div class="auth-features">
         <div class="auth-feature">
-          <span>Secure workforce data access</span>
-          <small>Session-based access control before the chat UI loads</small>
+          <span>HR-only platform scope</span>
+          <small>Out-of-scope requests are rejected before analysis starts</small>
         </div>
         <div class="auth-feature">
-          <span>SSO-ready identity layer</span>
-          <small>Microsoft, Google, and Okta style entry points</small>
+          <span>Role-based workforce data access</span>
+          <small>Metrics and queries are filtered to the user's assigned scope</small>
         </div>
         <div class="auth-feature">
-          <span>Model-flexible analytics</span>
-          <small>Works with Anthropic, local Llama, and OpenAI-compatible endpoints</small>
+          <span>Context and memory aware</span>
+          <small>Relevant policy, documents, and prior questions are pulled into each answer</small>
         </div>
       </div>
 
@@ -47,36 +55,46 @@
     </div>
   </div>
 
+  <div class="modal-shell hidden" id="llmModal">
+    <div class="modal-backdrop" id="llmModalBackdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div>
+          <div class="modal-kicker">Model Connection</div>
+          <h2 class="modal-title">Connect To Your LLM</h2>
+        </div>
+        <button class="modal-close" id="closeLlmModal" aria-label="Close">x</button>
+      </div>
+      <div class="modal-form">
+        <label class="modal-label">Provider</label>
+        <select id="providerSelect" class="sidebar-input sidebar-select"></select>
+        <label class="modal-label">Model</label>
+        <input id="modelInput" type="text" placeholder="Model name" class="sidebar-input" autocomplete="off" />
+        <label class="modal-label" id="baseUrlLabel">Base URL</label>
+        <input id="baseUrlInput" type="text" placeholder="Base URL" class="sidebar-input" autocomplete="off" />
+        <label class="modal-label">Credential</label>
+        <input id="apiKeyInput" type="password" placeholder="Optional for local OpenAI-compatible endpoints" class="sidebar-input" autocomplete="off" />
+      </div>
+      <p class="modal-note">Choose a provider your role is allowed to use. Local Llama, Anthropic, and OpenAI-compatible endpoints all work through the same governed chat flow.</p>
+    </div>
+  </div>
+
   <div class="layout hidden" id="appLayout">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-logo">
-        <div class="sidebar-logo-icon">🧠</div>
-        <div>
-          <div class="sidebar-logo-text">HR Intelligence</div>
-          <div class="sidebar-logo-sub">LLM Agnostic · Agentic</div>
+        <div class="sidebar-logo-icon">
+          <svg class="coffee-svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <path class="coffee-steam" d="M22 14C19 18 19 21 22 25" />
+            <path class="coffee-steam" d="M32 11C29 16 29 20 32 25" />
+            <path class="coffee-steam" d="M42 14C39 18 39 21 42 25" />
+            <path class="coffee-cup" d="M15 26H43V37C43 45 36 51 28 51H27C20 51 15 46 15 39V26Z" />
+            <path class="coffee-handle" d="M43 29H47C51 29 54 32 54 36C54 40 51 43 47 43H43" />
+            <path class="coffee-base" d="M18 55H45" />
+          </svg>
         </div>
-      </div>
-
-      <hr class="sidebar-divider" />
-
-      <div class="sidebar-section-label">Model</div>
-      <div class="input-wrap stack-sm">
-        <select id="providerSelect" class="sidebar-input sidebar-select"></select>
-        <input id="modelInput" type="text" placeholder="Model name" class="sidebar-input" autocomplete="off" />
-        <input id="baseUrlInput" type="text" placeholder="Base URL" class="sidebar-input" autocomplete="off" />
-      </div>
-
-      <hr class="sidebar-divider" />
-
-      <div class="sidebar-section-label">Credentials</div>
-      <div class="input-wrap">
-        <input
-          id="apiKeyInput"
-          type="password"
-          placeholder="Optional for local OpenAI-compatible endpoints"
-          class="sidebar-input"
-          autocomplete="off"
-        />
+        <div>
+          <div class="sidebar-logo-text">HR Insights Platform</div>
+        </div>
       </div>
 
       <hr class="sidebar-divider" />
@@ -98,16 +116,18 @@
 
       <div class="sidebar-section-label">Example Questions</div>
       <div id="examples" class="examples-list">
-        <button class="example-btn" data-q="How many employees left the company?">How many employees left the company?</button>
-        <button class="example-btn" data-q="What's the attrition rate by department?">What's the attrition rate by department?</button>
-        <button class="example-btn" data-q="Show attrition by job role as a bar chart">Show attrition by job role as a bar chart</button>
-        <button class="example-btn" data-q="Which factors most contribute to attrition?">Which factors most contribute to attrition?</button>
-        <button class="example-btn" data-q="Compare average salary across departments">Compare average salary across departments</button>
-        <button class="example-btn" data-q="Who are the highest risk employees?">Who are the highest risk employees?</button>
-        <button class="example-btn" data-q="Show age distribution of employees who left">Show age distribution of employees who left</button>
-        <button class="example-btn" data-q="How does overtime affect attrition?">How does overtime affect attrition?</button>
-        <button class="example-btn" data-q="What's the average tenure by department?">What's the average tenure by department?</button>
-        <button class="example-btn" data-q="Show satisfaction scores for leavers vs stayers">Show satisfaction scores for leavers vs stayers</button>
+        <button class="example-btn" data-q="What is the headcount for my team?">What is the headcount for my team?</button>
+        <button class="example-btn" data-q="What is the attrition rate for my scope?">What is the attrition rate for my scope?</button>
+        <button class="example-btn" data-q="Show attrition by department as a chart">Show attrition by department as a chart</button>
+        <button class="example-btn" data-q="Generate an active headcount report for my scope">Generate an active headcount report for my scope</button>
+        <button class="example-btn" data-q="Generate an attrition report for my scope">Generate an attrition report for my scope</button>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <div class="sidebar-section-label">Previously Asked</div>
+      <div id="historyList" class="history-list">
+        <div class="history-empty">No prior HR questions yet</div>
       </div>
 
       <hr class="sidebar-divider" />
@@ -124,13 +144,24 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div class="topbar-brand">
-          <span class="topbar-icon">🧠</span>
+          <span class="topbar-icon">
+            <svg class="coffee-svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+              <path class="coffee-steam" d="M22 14C19 18 19 21 22 25" />
+              <path class="coffee-steam" d="M32 11C29 16 29 20 32 25" />
+              <path class="coffee-steam" d="M42 14C39 18 39 21 42 25" />
+              <path class="coffee-cup" d="M15 26H43V37C43 45 36 51 28 51H27C20 51 15 46 15 39V26Z" />
+              <path class="coffee-handle" d="M43 29H47C51 29 54 32 54 36C54 40 51 43 47 43H43" />
+              <path class="coffee-base" d="M18 55H45" />
+            </svg>
+          </span>
           <div>
-            <div class="topbar-title">HR Intelligence Platform</div>
-            <div class="topbar-sub" id="topbarSub">Ask anything about your workforce · Provider-agnostic agent + SQLite</div>
+            <div class="topbar-title">HR Insights Platform</div>
+            <div class="topbar-sub" id="topbarSub">Only HR insights and role-approved workforce questions are supported</div>
           </div>
         </div>
         <div class="topbar-actions">
+          <div class="scope-pill hidden" id="scopePill"></div>
+          <button class="connect-btn" id="connectLlmBtn">Connect LLM</button>
           <div class="user-badge hidden" id="userBadge"></div>
           <button class="logout-btn hidden" id="logoutBtn">Sign Out</button>
         </div>
@@ -140,35 +171,37 @@
 
       <div class="messages" id="messages">
         <div class="empty-state" id="emptyState">
-          <div class="empty-icon">🧠</div>
-          <h2 class="empty-title">Ask anything about your workforce</h2>
-          <p class="empty-sub">Query data, analyze trends, and switch between Anthropic, local Llama, or any OpenAI-compatible model from the same interface.</p>
+          <div class="empty-icon">
+            <svg class="coffee-svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+              <path class="coffee-steam" d="M22 14C19 18 19 21 22 25" />
+              <path class="coffee-steam" d="M32 11C29 16 29 20 32 25" />
+              <path class="coffee-steam" d="M42 14C39 18 39 21 42 25" />
+              <path class="coffee-cup" d="M15 26H43V37C43 45 36 51 28 51H27C20 51 15 46 15 39V26Z" />
+              <path class="coffee-handle" d="M43 29H47C51 29 54 32 54 36C54 40 51 43 47 43H43" />
+              <path class="coffee-base" d="M18 55H45" />
+            </svg>
+          </div>
+          <h2 class="empty-title">Ask scoped HR questions only</h2>
+          <p class="empty-sub">The platform enforces role-based data access, remembers prior HR questions, and pulls relevant HR policy or schema context into answers.</p>
           <div class="suggestion-grid">
-            <button class="suggestion-card" data-q="What is the overall attrition rate?">
-              <span class="suggestion-icon">📊</span>
-              <span>What is the overall attrition rate?</span>
+            <button class="suggestion-card" data-q="What is the current headcount in my scope?">
+              <span class="suggestion-icon">KPI</span>
+              <span>What is the current headcount in my scope?</span>
             </button>
-            <button class="suggestion-card" data-q="Show attrition by department as a chart">
-              <span class="suggestion-icon">📉</span>
-              <span>Show attrition by department as a chart</span>
+            <button class="suggestion-card" data-q="Show attrition by department for my scope">
+              <span class="suggestion-icon">Risk</span>
+              <span>Show attrition by department for my scope</span>
             </button>
-            <button class="suggestion-card" data-q="Which roles have the highest turnover?">
-              <span class="suggestion-icon">⚡</span>
-              <span>Which roles have the highest turnover?</span>
+            <button class="suggestion-card" data-q="Generate an active headcount report for my scope">
+              <span class="suggestion-icon">Report</span>
+              <span>Generate an active headcount report for my scope</span>
             </button>
-            <button class="suggestion-card" data-q="How does overtime affect attrition?">
-              <span class="suggestion-icon">⏰</span>
-              <span>How does overtime affect attrition?</span>
-            </button>
-            <button class="suggestion-card" data-q="Compare average salary across departments">
-              <span class="suggestion-icon">💰</span>
-              <span>Compare average salary across departments</span>
-            </button>
-            <button class="suggestion-card" data-q="Which groups have the highest attrition risk?">
-              <span class="suggestion-icon">🔍</span>
-              <span>Which groups have the highest attrition risk?</span>
+            <button class="suggestion-card" data-q="Generate an attrition report for my scope">
+              <span class="suggestion-icon">Report</span>
+              <span>Generate an attrition report for my scope</span>
             </button>
           </div>
+          <div class="metric-examples" id="metricExamples"></div>
         </div>
       </div>
 
@@ -176,7 +209,7 @@
         <div class="input-inner">
           <textarea
             id="chatInput"
-            placeholder="Ask about your workforce... (Shift+Enter for new line)"
+            placeholder="Ask a scoped HR insights question..."
             rows="1"
             class="chat-textarea"
           ></textarea>
@@ -185,7 +218,7 @@
             <svg id="loadingIcon" class="spin hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" opacity=".25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="16" /></svg>
           </button>
         </div>
-        <p class="input-hint">Shift+Enter for new line · Results depend on the selected model and data access</p>
+        <p class="input-hint">Out-of-scope and unauthorized requests are blocked automatically. You can also ask for an active headcount report or an attrition report.</p>
       </div>
     </div>
   </div>

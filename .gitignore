@@ -4,6 +4,10 @@
 
 # Generated database (rebuild with: python setup_db.py)
 hr_data.db
+access_control.db
+context_store.db
+*.stdout.log
+*.stderr.log
 
 # Source data CSV (download separately — see README for link)
 *.csv
