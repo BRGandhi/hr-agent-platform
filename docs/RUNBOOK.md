@@ -1,353 +1,359 @@
-# Runbook — HR Intelligence Platform (v1)
+# Runbook
 
-Operational procedures for running, monitoring, and troubleshooting the platform.
+This runbook covers day-2 operations for the HR Insights Platform: how to start it, validate it, troubleshoot it, and operate it safely as an internal service.
 
----
+## 1. Operational Model
 
-## Table of Contents
-1. [Starting & Stopping](#1-starting--stopping)
-2. [Health Checks](#2-health-checks)
-3. [Common Errors & Fixes](#3-common-errors--fixes)
-4. [Database Operations](#4-database-operations)
-5. [API Key Management](#5-api-key-management)
-6. [Logs](#6-logs)
-7. [Performance Tuning](#7-performance-tuning)
-8. [Upgrade Procedure](#8-upgrade-procedure)
-9. [Incident Response](#9-incident-response)
+The current platform consists of:
+- a FastAPI application process
+- static frontend assets served by FastAPI
+- one or more upstream LLM providers
+- three local SQLite stores
 
----
+Those stores are:
+- `hr_data.db`
+- `access_control.db`
+- `context_store.db`
 
-## 1. Starting & Stopping
+The platform is stateful at runtime because it keeps:
+- in-memory chat sessions
+- in-memory auth sessions
 
-### Start (FastAPI + JS frontend)
+That means a restart does not corrupt the system, but it does clear active sessions.
+
+## 2. Start Procedures
+
+### 2.1 Local or foreground start
+
 ```bash
-cd hr-agent-platform
-python server.py
-# Listening on http://0.0.0.0:8000
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-Custom port:
+### 2.2 Server start through systemd
+
 ```bash
-PORT=9000 python server.py
+sudo systemctl start hr-insights
+sudo systemctl status hr-insights
 ```
 
-### Start (Streamlit legacy)
+### 2.3 Legacy Streamlit start
+
 ```bash
-python -m streamlit run app.py --server.port 8501
+python -m streamlit run app.py
 ```
 
-### Stop
-`Ctrl+C` in the terminal. The server is stateless — no clean-shutdown steps required.
+This path is not the recommended operational interface for the governed web experience.
 
-### Restart (with nohup / background)
+## 3. Stop Procedures
+
+### Foreground process
+- `Ctrl+C`
+
+### systemd
+
 ```bash
-nohup python server.py > hr_platform.log 2>&1 &
-echo $! > server.pid
+sudo systemctl stop hr-insights
 ```
-To stop:
+
+## 4. Health Checks
+
+### 4.1 Basic import check
+
 ```bash
-kill $(cat server.pid)
+python - <<'PY'
+import server
+print("server_ok")
+PY
 ```
 
----
+### 4.2 Frontend reachability
 
-## 2. Health Checks
-
-### FastAPI
 ```bash
-curl http://localhost:8000/api/stats
-```
-Expected response:
-```json
-{
-  "total_employees": 1470,
-  "attrited_employees": 237,
-  "active_employees": 1233,
-  "attrition_rate_pct": 16.1,
-  "columns": ["Age", "Attrition", ...]
-}
+curl -I http://127.0.0.1:8000/
 ```
 
-| Status | Meaning |
-|---|---|
-| `200` with data | Healthy |
-| `500` | Database error — see [§4](#4-database-operations) |
-| `Connection refused` | Server not running |
+Expected:
+- HTTP 200
 
-### Streamlit
+### 4.3 Auth config reachability
+
 ```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8501/healthz
-# Expected: 200
+curl http://127.0.0.1:8000/api/auth/config
 ```
 
----
+Expected:
+- JSON payload describing auth requirements and supported providers
 
-## 3. Common Errors & Fixes
+### 4.4 Manual smoke test
+1. Open the UI
+2. Sign in with a demo provider
+3. Confirm the KPI strip loads
+4. Ask a scoped HR question
+5. Ask an out-of-scope question and confirm refusal
 
-### `hr_data.db not found`
-```
-STATUS: error in sidebar / "Database not found" banner
-```
-**Fix:**
+## 5. Files That Must Exist
+
+Minimum required for the primary app flow:
+- `.env`
+- `hr_data.db`
+- Python virtual environment or equivalent runtime
+
+Created automatically at runtime if missing:
+- `access_control.db`
+- `context_store.db`
+
+If `hr_data.db` is missing, rebuild it with:
+
 ```bash
-# Ensure CSV is present one level above the project folder, then:
 python setup_db.py
 ```
 
-### `Invalid Anthropic API key`
-```
-EVENT: {"type": "error", "message": "Invalid Anthropic API key..."}
-```
-**Fix:** Enter a valid `sk-ant-...` key in the sidebar or set `ANTHROPIC_API_KEY` in `.env`.
+## 6. Logging
 
-### `Rate limit reached`
-```
-EVENT: {"type": "error", "message": "Rate limit reached. Please wait..."}
-```
-**Fix:** Wait 30-60 seconds and retry. If persistent, check your usage tier at [console.anthropic.com](https://console.anthropic.com).
+### 6.1 Application logs
+If started via `uvicorn`, logs go to stdout/stderr unless redirected.
 
-### `Agent reached max iterations`
-```
-EVENT: {"type": "error", "message": "Agent reached max iterations (10)..."}
-```
-**Cause:** Very complex multi-part question caused more than 10 tool calls.
-**Fix:** Rephrase as two simpler questions, or increase `MAX_AGENT_ITERATIONS` in `config.py` (watch cost).
+Example:
 
-### `SQL rejected by safety validator`
-```
-Tool result: "SQL rejected by safety validator: ..."
-```
-**Cause:** Claude generated a query containing a blocked keyword (`DROP`, `INSERT`, `DELETE`, `UPDATE`, `--`, `;`).
-**Fix:** This is expected safety behavior — the agent will self-correct on its next iteration. If it loops, rephrase the question.
-
-### `httptools` build failure (Windows ARM64)
-```
-error: Microsoft Visual C++ 14.0 or greater is required...
-```
-**Fix:**
 ```bash
-pip install fastapi uvicorn python-multipart   # no [standard] suffix
+python -m uvicorn server:app --host 0.0.0.0 --port 8000 >> app.log 2>&1
 ```
 
-### Port already in use
-```
-ERROR: [Errno 48] Address already in use
-```
-**Fix:**
+### 6.2 What to look for
+
+Useful log patterns:
+- `401 Authentication required`: missing or invalid auth session
+- `400 Empty message`: malformed chat request
+- `Anthropic API error` or `OpenAI-compatible provider error`: upstream model problem
+- `Tool execution error`: problem in tool code or query path
+
+### 6.3 Recommended future logging posture
+For a bank-internal deployment, ship logs to a centralized platform and include:
+- authenticated user identifier
+- resolved access scope
+- tool name executed
+- report type generated
+- error category
+
+Avoid logging:
+- raw secrets
+- unnecessary personal data from report outputs
+
+## 7. Common Operational Checks
+
+### Check repo status
+
 ```bash
-# Find and kill the process
-lsof -ti:8000 | xargs kill -9   # Mac/Linux
-netstat -ano | findstr :8000    # Windows — note PID, then:
-taskkill /PID <PID> /F
+git status --short
 ```
 
-### Plotly chart not rendering (JS frontend)
-**Symptom:** Chart card appears but is empty.
-**Cause:** Plotly.js CDN blocked (corporate proxy) or chart JSON parse error.
-**Fix:** Check browser console for errors. If Plotly CDN is blocked, download `plotly-2.35.2.min.js` and host it locally:
-```html
-<!-- index.html — change CDN to local -->
-<script src="/static/plotly.min.js" defer></script>
-```
-Place the file in `static/`.
+### Confirm databases exist
 
----
-
-## 4. Database Operations
-
-### Rebuild database from scratch
 ```bash
-rm hr_data.db       # Mac/Linux
-del hr_data.db      # Windows
-python setup_db.py
+ls *.db
 ```
 
-### Inspect database
+### Verify the HR data table
+
 ```bash
-python - <<'EOF'
+python - <<'PY'
 import sqlite3
 conn = sqlite3.connect("hr_data.db")
-print(conn.execute("SELECT COUNT(*) FROM employees").fetchone())
-print([r[1] for r in conn.execute("PRAGMA table_info(employees)").fetchall()])
+print(conn.execute("select count(*) from employees").fetchone())
 conn.close()
-EOF
+PY
 ```
 
-### Run a manual query
+### Verify access-control data
+
 ```bash
-python - <<'EOF'
-from database.connector import HRDatabase
-db = HRDatabase()
-rows = db.execute_query("SELECT Department, COUNT(*) as n FROM employees GROUP BY Department")
-for r in rows: print(r)
-EOF
+python - <<'PY'
+from database.access_control import AccessControlStore
+store = AccessControlStore()
+print(store.get_profile("demo.google@hr-intelligence.local"))
+PY
 ```
 
-### Backup
+### Verify context store
+
 ```bash
-cp hr_data.db hr_data.db.bak
+python - <<'PY'
+from database.context_store import ContextStore
+store = ContextStore()
+print(store.list_documents())
+PY
 ```
 
----
+## 8. Frequent Failure Modes
 
-## 5. API Key Management
+### 8.1 `hr_data.db` missing
+Symptoms:
+- scoped KPI strip fails
+- queries do not work
 
-### How the key is loaded (priority order)
-1. `ANTHROPIC_API_KEY` environment variable
-2. `ANTHROPIC_API_KEY` in `.env` file
-3. Runtime sidebar input (stored in-memory only, not on disk)
+Fix:
 
-### Rotate the key
-1. Generate new key at [console.anthropic.com](https://console.anthropic.com)
-2. Update `.env`: `ANTHROPIC_API_KEY=sk-ant-NEWKEY`
-3. Restart the server — no database rebuild needed
-
-### Verify the key works
 ```bash
-python - <<'EOF'
-import anthropic, os
-from dotenv import load_dotenv
-load_dotenv()
-client = anthropic.Anthropic()
-r = client.messages.create(model="claude-opus-4-6", max_tokens=10, messages=[{"role":"user","content":"ping"}])
-print("OK:", r.content[0].text)
-EOF
-```
-
----
-
-## 6. Logs
-
-### FastAPI (stdout)
-All requests and errors print to stdout:
-```
-INFO:     127.0.0.1:54321 - "POST /api/chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:54321 - "GET /api/stats HTTP/1.1" 200 OK
-```
-
-### Redirect to file
-```bash
-python server.py >> hr_platform.log 2>&1
-```
-
-### Streamlit logs
-Streamlit writes to `~/.streamlit/logs/`. Access via:
-```bash
-cat ~/.streamlit/logs/streamlit.log
-```
-
-### What to look for
-| Log pattern | Meaning |
-|---|---|
-| `422 Unprocessable Entity` | Bad request body — check JSON format |
-| `500 Internal Server Error` | Agent or DB error — check traceback |
-| `AuthenticationError` | Invalid API key |
-| `RateLimitError` | Slow down — too many concurrent requests |
-
----
-
-## 7. Performance Tuning
-
-### Model latency
-- `claude-opus-4-6` (default): best quality, 3-15s per response
-- `claude-sonnet-4-5`: ~2x faster, lower cost — change in `config.py`:
-  ```python
-  DEFAULT_MODEL = "claude-sonnet-4-5"
-  ```
-
-### Disable adaptive thinking
-In `agent/orchestrator.py`, change:
-```python
-thinking={"type": "adaptive"}
-# to:
-thinking={"type": "disabled"}
-```
-This reduces latency and cost at the expense of reasoning depth.
-
-### Reduce max iterations
-```python
-# config.py
-MAX_AGENT_ITERATIONS = 5  # default 10
-```
-Limits tool-call chains — appropriate for simpler single-question use cases.
-
-### SQLite performance
-For >50k employees, add an index:
-```sql
-CREATE INDEX IF NOT EXISTS idx_attrition ON employees(Attrition);
-CREATE INDEX IF NOT EXISTS idx_department ON employees(Department);
-```
-Run via `python -c "from database.connector import HRDatabase; db=HRDatabase(); db._get_connection().execute('CREATE INDEX ...')"`.
-
----
-
-## 8. Upgrade Procedure
-
-### Pull latest code
-```bash
-git pull origin main
-pip install -r requirements.txt   # picks up new deps
-```
-
-### Check for breaking changes
-Look at `docs/CODE_LOG.md` for any database schema changes that require a DB rebuild.
-
-### If `requirements.txt` changed significantly
-```bash
-pip install --upgrade -r requirements.txt
-```
-
-### If schema changed
-```bash
-rm hr_data.db
 python setup_db.py
 ```
 
----
+### 8.2 No model configured
+Symptoms:
+- chat request returns `Model is required`
 
-## 9. Incident Response
+Fix:
+- set `DEFAULT_LLM_PROVIDER` and the corresponding model env variables
+- or choose a provider/model through the UI
 
-### Complete outage (server unreachable)
+### 8.3 Anthropic key missing
+Symptoms:
+- `Anthropic API key required`
 
-1. Check if process is running: `ps aux | grep server.py` (Mac/Linux) or Task Manager (Windows)
-2. Check port: `curl http://localhost:8000/api/stats`
-3. Check `.env` exists and has API key
-4. Check `hr_data.db` exists
-5. Restart: `python server.py`
+Fix:
+- set `ANTHROPIC_API_KEY`
+- or switch to an OpenAI-compatible model path
 
-### All queries failing with "database error"
+### 8.4 Upstream model endpoint unavailable
+Symptoms:
+- provider error
+- timeout
+- connection failures
 
-1. Test DB directly: `python -c "from database.connector import HRDatabase; print(HRDatabase().is_connected())"`
-2. If `False`, rebuild: `python setup_db.py`
+Fix:
+- validate outbound network access
+- validate provider credentials
+- validate local Ollama or compatible service is running
 
-### All queries returning "API error"
+### 8.5 Out-of-scope answer when the user expected data
+Symptoms:
+- the platform refuses the question
 
-1. Check API key: see [§5](#5-api-key-management)
-2. Check Anthropic status: [status.anthropic.com](https://status.anthropic.com)
-3. Check network: `curl https://api.anthropic.com` should return a response
+Likely causes:
+- the prompt is not HR-related enough
+- the user asked for a metric outside the access profile
+- the user asked for a non-HR task
 
-### Chart not rendering but text works
+Fix:
+- verify the user profile in `access_control.db`
+- rephrase the question in explicit HR terms
 
-1. Open browser DevTools → Console — look for Plotly errors
-2. Try a different chart type: "show as bar chart" vs "show as pie chart"
-3. If Plotly CDN unreachable, host locally (see [§3](#3-common-errors--fixes))
+### 8.6 Sidebar history is empty unexpectedly
+Possible causes:
+- the user has not asked a question yet
+- the app is using a different identity than expected
+- `context_store.db` was recreated
 
-### Memory growing over time
+Fix:
+- check the auth session user
+- inspect `conversation_memory` in `context_store.db`
 
-The `_sessions` dict in `server.py` grows unbounded. Restart the server or add a TTL-based eviction:
-```python
-# Add to server.py — prune sessions older than 1 hour
-import time
-SESSION_TTL = 3600
-_session_times = {}
+## 9. Backup And Restore
 
-def _get_or_create_session(session_id, api_key):
-    now = time.time()
-    # Evict stale sessions
-    stale = [k for k, t in _session_times.items() if now - t > SESSION_TTL]
-    for k in stale:
-        _sessions.pop(k, None)
-        _session_times.pop(k, None)
-    _session_times[session_id] = now
-    ...
+### 9.1 What to back up
+- `hr_data.db`
+- `access_control.db`
+- `context_store.db`
+- `.env`
+
+### 9.2 Simple file backup
+
+```bash
+cp hr_data.db hr_data.db.bak
+cp access_control.db access_control.db.bak
+cp context_store.db context_store.db.bak
+cp .env .env.bak
 ```
+
+### 9.3 Restore
+
+```bash
+cp hr_data.db.bak hr_data.db
+cp access_control.db.bak access_control.db
+cp context_store.db.bak context_store.db
+cp .env.bak .env
+```
+
+After restore, restart the app.
+
+## 10. Release And Upgrade Procedure
+
+### 10.1 Pull latest code
+
+```bash
+git pull origin master
+```
+
+### 10.2 Refresh dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 10.3 Re-run safety checks
+
+```bash
+python -m compileall .
+python - <<'PY'
+import server
+print("server_ok")
+PY
+```
+
+### 10.4 Check whether data stores need migration
+This repo currently uses lightweight SQLite initialization logic rather than a migration framework. After upgrades:
+- confirm `access_control.db` still loads
+- confirm `context_store.db` still loads
+- rebuild `hr_data.db` if the source schema changed
+
+## 11. Security Operations Guidance
+
+This section is especially relevant for internal bank use.
+
+### Current repo defaults that must be reviewed
+- CORS is open
+- auth cookies are not yet production-hardened
+- auth sessions are in-memory
+- dev SSO is not real enterprise SSO
+
+### Minimum production actions
+1. Put the app behind TLS.
+2. Restrict network access to internal users and trusted services.
+3. Replace dev SSO with corporate identity.
+4. Move session state to a shared service.
+5. Review retention policy for `context_store.db`.
+6. Decide whether conversation history should be considered regulated user activity data.
+
+## 12. Incident Response Checklist
+
+### Scenario: UI loads but chat fails
+1. Confirm LLM provider config in `.env`
+2. Confirm network access to upstream model
+3. Inspect logs for provider-specific errors
+4. Test with a simple HR question
+
+### Scenario: users see wrong data scope
+1. Inspect the user email resolved by auth
+2. Inspect `access_control.db`
+3. Verify department scoping behavior in [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py)
+4. Verify metric restrictions in [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
+
+### Scenario: out-of-scope filtering is too aggressive
+1. Review keyword-based scope logic in [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
+2. Review prompt instructions in [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
+3. Test with a clearer HR-specific prompt
+
+### Scenario: memory quality is poor
+1. Inspect documents in `context_store.db`
+2. Add or update context docs through `/api/context/documents`
+3. Review retrieval behavior in [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py)
+
+## 13. Recommended Production Hardening Backlog
+
+For internal-bank readiness, the next runbook-worthy improvements should be:
+1. Real SSO integration
+2. Redis or equivalent shared session store
+3. stronger secret handling
+4. centralized structured logging
+5. request timeouts and rate limiting
+6. automated smoke tests
+7. role and report audit trails

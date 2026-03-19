@@ -1,175 +1,103 @@
-# Code Log — HR Intelligence Platform
+# Code Log
 
-Chronological record of all significant changes, architectural decisions, and design rationale. Useful for onboarding, audits, and understanding "why it was built this way."
+This file records the major architectural changes and implementation milestones in the repository. It is intended to help future maintainers understand not only what changed, but why it changed.
 
----
+## v1.5 - Documentation Refresh For Internal Deployment
 
-## v1.3 — JS/HTML Frontend + FastAPI Backend
-**Summary:** Replaced Streamlit server with FastAPI + vanilla JS frontend. Streamlit UI preserved as a legacy option.
+Summary:
+- rewrote repository documentation to match the current governed HR platform
+- added architecture and onboarding guidance for engineers new to the repo
+- documented the system as an internal-tooling foundation for a bank or other regulated environment
 
-### New files
-| File | Purpose |
-|---|---|
-| `server.py` | FastAPI app: SSE streaming, static file serving, session management |
-| `static/index.html` | App shell — sidebar, KPI strip, message thread, input bar |
-| `static/style.css` | Full design system (CSS custom properties, indigo theme, dark sidebar) |
-| `static/app.js` | All client logic: SSE parsing, Plotly rendering, session persistence |
+Key documentation outcomes:
+- README now explains the current platform, not the earlier prototype
+- architecture is documented in a dedicated guide
+- implementation and runbook docs now distinguish demo defaults from bank-ready expectations
+- data dictionary now covers all three SQLite stores instead of only the HR dataset
 
-### Changed files
-| File | Change |
-|---|---|
-| `requirements.txt` | Added `fastapi>=0.115.0`, `uvicorn>=0.32.0`, `python-multipart>=0.0.12` |
-| `run.bat` | Default now launches FastAPI; `run.bat streamlit` for legacy |
-| `setup_and_run.bat` | Removed hardcoded personal system path |
-| `.gitignore` | Added `hr_data.db` and `*.csv` exclusions |
+Why this matters:
+- the code had evolved faster than the docs
+- new engineers needed a realistic clone-and-run path
+- deployment stakeholders needed clarity on what is already governed and what still needs hardening
 
-### Architecture decisions
+## v1.4 - Governed HR Platform Upgrade
 
-**Why SSE instead of WebSockets?**
-SSE (Server-Sent Events) is one-directional (server → client) which matches the agent's streaming pattern exactly. It works over standard HTTP/1.1, requires no upgrade handshake, and is auto-reconnecting in browsers. WebSockets add bidirectional complexity that isn't needed here.
+Summary:
+- transformed the app from a general HR analytics assistant into a governed HR-only platform
+- introduced role-based access control, context memory, standard reports, and a modernized web UI
 
-**Why vanilla JS instead of React?**
-The v1 platform is a prototype/demo tool. React adds a build step, node_modules, and tooling overhead that slows adoption. Vanilla JS loads instantly, has zero dependencies beyond Plotly.js (from CDN), and can be dropped into any environment. The v2 upgrade path (React) is available for teams that need the full-featured version.
+Major changes:
+- added `database/access_control.py`
+- added `database/context_store.py`
+- updated `server.py` with auth-aware access lookup, history, and context endpoints
+- updated `agent/orchestrator.py` to enforce scope before model execution
+- updated `agent/prompts.py` to inject access, memory, and retrieved documents
+- updated `database/connector.py` to apply department scoping
+- added standard report generation through `generate_standard_report`
+- updated the web UI to show scoped metrics, history, and provider controls in the top banner
 
-**Why in-memory sessions?**
-Simple and sufficient for single-user or small-team use. Each `session_id` maps to an `HRAgent` instance in a Python dict. For multi-user production, replace with Redis (see RUNBOOK §7).
+Design rationale:
+- internal HR tools need explicit scope enforcement
+- memory and policy retrieval increase answer quality without widening the model's freedom
+- provider abstraction prevents the rest of the agent loop from depending on a single vendor
 
-**Why keep the Streamlit frontend?**
-Some users prefer Streamlit's interactive dataframe/table rendering and quick prototyping ergonomics. Both frontends call the same Python agent — no duplication.
+## v1.3 - FastAPI And Vanilla JS Frontend
 
----
+Summary:
+- introduced the FastAPI backend and browser UI
+- kept Streamlit as a secondary interface
 
-## v1.2 — Visual Polish (Streamlit)
-**Summary:** Modernized the Streamlit UI with a professional design system.
+Why the change was made:
+- the browser UI allows better streaming, richer cards, and clearer control over auth and scope
+- SSE is a good fit for one-way streamed agent responses
+- vanilla JS kept the frontend lightweight and easy to deploy without a Node toolchain
 
-### Changed files
-| File | Change |
-|---|---|
-| `app.py` | Replaced HTML chat bubble divs with `st.chat_message()`; added KPI strip; new CSS |
-| `.streamlit/config.toml` | New file — indigo primary color, Inter font, light theme |
-| `agent/tool_executor.py` | New 8-color palette; donut pie charts; professional Plotly layout overrides |
+Architectural notes:
+- `server.py` became the runtime entry point for the primary app
+- `static/index.html`, `static/app.js`, and `static/style.css` formed the browser interface
+- in-memory server-side sessions were introduced for conversation continuity
 
-### Design decisions
+## v1.2 - Visual Refresh And Interaction Improvements
 
-**Why `st.chat_message()` over custom HTML divs?**
-Streamlit's native chat component handles accessibility, avatar rendering, and streaming more robustly than injected HTML. The original HTML bubble approach was fragile with Streamlit version updates.
+Summary:
+- improved the frontend presentation and chart rendering experience
 
-**Chart color palette:**
-```python
-["#6366F1", "#10B981", "#F59E0B", "#EF4444", "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6"]
-```
-Chosen for: (1) high contrast on white backgrounds, (2) colorblind-safe (avoid red/green pairing for significance), (3) consistent with Tailwind/Radix color tokens used in v2.
+Why it mattered:
+- the platform was intended for stakeholder-facing demos and internal adoption
+- charts, KPI cards, and clearer interaction patterns made the output more useful for non-engineers
 
-**KPI strip data source:**
-`HRDatabase.get_table_stats()` runs 3 lightweight SQLite queries at app startup (total count, attrition count, column list). Cached in `st.session_state` to avoid re-running on every rerender.
+## v1.1 - Compatibility And Packaging Fixes
 
----
+Summary:
+- addressed environment issues encountered during setup and testing
 
-## v1.1 — Bug Fixes
-**Summary:** Addressed compatibility issues found during ARM64 Windows testing.
+Examples:
+- package installation fixes
+- UI adjustments
+- deployment script cleanup
 
-### Changes
-| File | Change | Reason |
-|---|---|---|
-| `app.py` | Replaced `st.dataframe()` → `st.table()` → back to `st.dataframe()` | pyarrow dependency conflict on ARM64; `st.dataframe()` with `hide_index=True` works on newer Streamlit |
-| `Dockerfile` | Added `--prefer-binary` flag to pip install | Prevents C extension compilation on ARM64 |
-| `render.yaml` | Added health check path | Render deployment was timing out |
-| `app.py` | Added `APP_PASSWORD` environment variable gate | Basic access control for shared deployments |
+## v1.0 - Initial Release
 
-### Known limitations at this version
-- No conversation persistence (memory lost on server restart)
-- Streamlit re-renders entire page on each message (not true streaming)
-- Single-user: no concurrent session isolation in Streamlit
+Summary:
+- established the first working HR analytics agent prototype
 
----
+Core concepts introduced:
+- tool-based HR analytics agent
+- SQLite-backed dataset
+- prompt-driven SQL generation
+- report and visualization helpers
 
-## v1.0 — Initial Release
-**Summary:** Core agentic HR analytics platform.
+Initial design choices:
+- keep dependencies light
+- avoid heavy agent frameworks
+- use Python-native tools and a straightforward orchestration loop
 
-### Architecture established
+## Ongoing Technical Debt
 
-**Agent pattern: Think → Act → Observe loop**
-```
-while iterations < MAX:
-    response = claude(conversation_history + tools)
-    if stop_reason == "end_turn":  yield final_text; return
-    if stop_reason == "tool_use":
-        for each tool_use block:
-            yield tool_call event
-            result = executor.execute(tool, inputs)
-            yield tool_result event
-        append results to history
-```
-This is the simplest correct implementation of a tool-use agent. No framework (no LangChain, no LlamaIndex) — just the Anthropic SDK's `messages.create()` API called in a loop.
-
-**Why no streaming from Claude?**
-The `messages.create()` call (not `stream()`) was used initially for simplicity. Tool-use results need to be gathered before feeding back to Claude anyway, so true token-level streaming only applies to the final `end_turn` response. The UI simulates streaming by updating the DOM as each event is yielded from the generator.
-
-**Why adaptive thinking?**
-`thinking={"type": "adaptive"}` lets Claude decide when extended reasoning is worth the token cost. For simple queries ("how many employees?") it uses zero thinking tokens. For multi-factor analysis it may use 1,000-5,000 tokens. This balances cost and quality automatically.
-
-**Tool design decisions**
-
-`query_hr_database` — Why let Claude write raw SQL?
-Claude Opus 4.6 is highly capable at SQL generation. Rather than building a query builder or NL→SQL intermediate layer, we give Claude the schema (in the system prompt via `database/schema.py`) and let it generate the query directly. The `utils/safety.py` validator ensures only SELECT statements execute.
-
-`calculate_metrics` — Why a separate metrics tool?
-SQL aggregations cover 80% of metric needs, but some operations (correlation, distribution percentiles) are awkward in SQLite. This tool accepts JSON data (output from `query_hr_database`) and runs pandas operations. It keeps SQL complexity in check.
-
-`create_visualization` — Why Plotly JSON, not images?
-Returning Plotly's JSON figure spec (via `fig.to_json()`) means the frontend can render interactive charts. The chart is the full Plotly figure object — users can hover, zoom, and download. Image-based charts (PNG/SVG) would lose interactivity.
-
-`get_attrition_insights` — Why pre-built queries?
-The six `focus_area` queries are carefully crafted SQL that cover the most common HR analysis patterns. They run faster and more reliably than ad-hoc SQL generated for the same question. Claude calls this tool first for attrition questions, then follows up with `query_hr_database` for specifics.
-
-**SQL safety design**
-`utils/safety.py` implements a two-layer defense:
-1. **Keyword blocklist:** `DROP`, `DELETE`, `UPDATE`, `INSERT`, `CREATE`, `ALTER`, `TRUNCATE`, `--`, `;` — rejects any query containing these
-2. **Auto-LIMIT:** Appends `LIMIT 500` if no LIMIT clause present — prevents full-table scans returning 1M+ rows to the agent context
-
-The `execute_query()` method in `database/connector.py` also checks that the query starts with `SELECT` as a final backstop.
-
-### Files created at v1.0
-
-| File | Lines | Purpose |
-|---|---|---|
-| `app.py` | 380 | Streamlit UI |
-| `config.py` | 15 | Configuration constants |
-| `setup_db.py` | ~50 | CSV → SQLite loader |
-| `agent/orchestrator.py` | 160 | HRAgent class |
-| `agent/tool_executor.py` | 350 | 4 tool implementations |
-| `agent/tools.py` | ~80 | Tool JSON schemas |
-| `agent/prompts.py` | 40 | System prompt |
-| `database/connector.py` | 55 | SQLite wrapper |
-| `database/schema.py` | ~60 | Column descriptions |
-| `utils/safety.py` | ~40 | SQL validator |
-| `Dockerfile` | 20 | Container build |
-| `render.yaml` | 15 | Render.com deploy config |
-
----
-
-## Known Technical Debt
-
-| Item | Impact | Suggested Fix |
-|---|---|---|
-| In-memory sessions | Lost on restart, single-server only | Redis-backed session store |
-| No token counting | Unexpectedly high costs on long sessions | Count tokens, warn user at threshold |
-| Plotly CDN dependency | Breaks in air-gapped environments | Bundle Plotly.js in `static/` |
-| No request timeout | Long-running queries block indefinitely | Add `asyncio.wait_for()` timeout in `server.py` |
-| No auth | Anyone with network access can use the key | Add API key validation header or session token |
-| `calculate_metrics` limited patterns | Only handles specific `operation` strings | Use Claude to generate pandas code dynamically |
-| `MAX_AGENT_ITERATIONS` not per-user | Global limit, not per-conversation | Pass limit through to `HRAgent` constructor |
-
----
-
-## Dependency Decisions
-
-| Package | Why chosen | Alternative considered |
-|---|---|---|
-| `anthropic` | Official SDK, tool_use support, streaming | `openai` (different models) |
-| `plotly` | Interactive JSON charts, Python + JS ecosystem | `matplotlib` (static images only) |
-| `pandas` | Standard data manipulation, excellent SQLite/CSV integration | `polars` (faster but less mature ecosystem) |
-| `fastapi` | Async, SSE streaming, auto docs, Pydantic | `flask` (sync only, no SSE), `django` (too heavy) |
-| `uvicorn` | Standard ASGI server for FastAPI | `gunicorn` (WSGI, not async) |
-| `streamlit` | Fastest way to build data UI in Python | `dash` (more complex), `gradio` (ML-focused) |
-| `python-dotenv` | Standard `.env` file handling | Manual `os.environ` (no file support) |
+The following items remain important for future maintainers:
+- replace dev SSO with real enterprise identity
+- replace in-memory auth and chat sessions with shared persistence
+- restrict CORS for production
+- add automated tests across auth, access control, and tool flows
+- decide whether SQLite remains appropriate for long-term internal-bank use
+- harden audit logging and secrets management

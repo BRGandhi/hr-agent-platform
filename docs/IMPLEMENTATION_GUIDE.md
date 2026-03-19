@@ -1,333 +1,390 @@
 # Implementation Guide
 
-> For teams picking up this project and deploying it to their environment.
+This guide is for someone who is new to the repository and wants to clone it, run it locally, and then move it onto a server for internal use.
 
----
+The intended audience includes:
+- engineers onboarding to the project
+- platform teams deploying internal tools
+- architects reviewing the repo for enterprise adoption
+- developers extending the HR analytics experience
 
-## Table of Contents
-1. [System Requirements](#1-system-requirements)
-2. [Repository Setup](#2-repository-setup)
-3. [Data Preparation](#3-data-preparation)
-4. [Backend Configuration](#4-backend-configuration)
-5. [Running Locally](#5-running-locally)
-6. [Frontend Overview](#6-frontend-overview)
-7. [Replacing the Dataset](#7-replacing-the-dataset)
-8. [Customizing the Agent](#8-customizing-the-agent)
-9. [Production Deployment](#9-production-deployment)
-10. [Upgrading to v2](#10-upgrading-to-v2)
+## 1. What You Are Deploying
 
----
+When you run this repo, you are standing up:
+- a web UI for HR-only analytics
+- a FastAPI backend that streams results over SSE
+- a governed tool-using agent
+- a scoped HR dataset
+- an access-control store linked to the authenticated user email
+- a memory/context store for prior questions and policy documents
 
-## 1. System Requirements
+Important: this repo already contains production-oriented patterns, but it still includes demo-grade defaults. Treat it as a strong internal prototype or reference implementation, not a completed bank-hardened product.
 
-| Requirement | Minimum | Recommended |
+## 2. Repository Contents
+
+At a minimum, understand these files before modifying the platform:
+
+### Top-level
+- [README.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/README.md): overview and repo map
+- [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py): main backend entry point
+- [app.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/app.py): legacy Streamlit UI
+- [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py): builds `hr_data.db`
+- [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py): environment-driven runtime configuration
+
+### Agent
+- [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py)
+- [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py)
+- [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
+- [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py)
+- [agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py)
+
+### Data and policy
+- [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py)
+- [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
+- [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py)
+- [database/schema.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/schema.py)
+
+### Frontend
+- [static/index.html](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/index.html)
+- [static/app.js](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/app.js)
+- [static/style.css](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/style.css)
+
+## 3. System Requirements
+
+| Component | Minimum | Recommended |
 |---|---|---|
 | Python | 3.10 | 3.12 |
-| RAM | 512 MB | 2 GB |
-| Disk | 100 MB | 500 MB |
-| OS | Windows 10, macOS 12, Ubuntu 20.04 | Any |
-| Network | Outbound HTTPS to `api.anthropic.com` | — |
+| RAM | 1 GB | 4 GB |
+| Disk | 500 MB | 2 GB |
+| Network | outbound access to chosen LLM endpoint | internal reverse proxy + managed egress |
 
-**Python packages installed by `requirements.txt`:**
-```
-anthropic>=0.40.0       # Anthropic SDK (Claude API)
-streamlit>=1.32.0       # Legacy Streamlit UI (optional)
-pandas>=2.0.0           # Data manipulation for metrics
-plotly>=5.18.0          # Chart generation
-python-dotenv>=1.0.0    # .env file loading
-fastapi>=0.115.0        # Modern REST/SSE backend
-uvicorn>=0.32.0         # ASGI server
-python-multipart>=0.0.12 # Multipart form parsing
-```
+Python dependencies are declared in [requirements.txt](c:/Users/bhavy/Downloads/hr_agent_platform_github/requirements.txt):
+- `fastapi`
+- `uvicorn`
+- `anthropic`
+- `openai`
+- `pandas`
+- `plotly`
+- `python-dotenv`
+- `streamlit`
 
-> **ARM64 Windows note:** If you're on Windows ARM (Surface Pro X, Snapdragon laptops), install pandas with `--only-binary=:all:` and uvicorn without `[standard]` (no httptools). `setup_and_run.bat` handles this automatically.
+## 4. Clone And Install
 
----
-
-## 2. Repository Setup
+### 4.1 Clone
 
 ```bash
 git clone https://github.com/BRGandhi/hr-agent-platform.git
 cd hr-agent-platform
+```
 
-# Create a virtual environment (recommended)
+### 4.2 Create a virtual environment
+
+```bash
 python -m venv .venv
+```
 
-# Activate
-# Windows:   .venv\Scripts\activate
-# Mac/Linux: source .venv/bin/activate
+Activate:
+- Windows PowerShell:
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
+- macOS/Linux:
+  ```bash
+  source .venv/bin/activate
+  ```
 
+### 4.3 Install dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### Environment file
+## 5. Configure The Environment
+
+Copy the example file:
+
 ```bash
-cp .env.example .env
-```
-Edit `.env`:
-```
-ANTHROPIC_API_KEY=sk-ant-YOUR_KEY_HERE
+copy .env.example .env
 ```
 
-Your API key is loaded by `config.py` via `python-dotenv`. Alternatively, enter it in the app sidebar at runtime — it is never stored to disk.
+The current configurable items are defined in [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py).
 
----
+### Recommended development configuration
 
-## 3. Data Preparation
-
-The platform ships without the dataset. Download the IBM HR Attrition CSV:
-
-**Source:** [Kaggle — IBM HR Analytics](https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset)
-**File:** `WA_Fn-UseC_-HR-Employee-Attrition.csv` (1,470 rows × 35 columns, ~300 KB)
-
-Place the CSV **one folder above** `hr-agent-platform/`:
-```
-parent-folder/
-  WA_Fn-UseC_-HR-Employee-Attrition.csv   ← here
-  hr-agent-platform/
-    setup_db.py
-    ...
+```env
+DEFAULT_LLM_PROVIDER=openai-compatible
+DEFAULT_OPENAI_COMPAT_MODEL=llama3.1:8b
+DEFAULT_OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
+OPENAI_API_KEY=
+SESSION_TTL_MINUTES=120
+AUTH_REQUIRED=true
+DEV_SSO_ENABLED=true
+SSO_PROVIDERS=Microsoft,Google,Okta
 ```
 
-Then build the SQLite database:
-```bash
-python setup_db.py
-# Creates: hr_data.db (~1.5 MB)
+### Anthropic configuration
+
+```env
+DEFAULT_LLM_PROVIDER=anthropic
+DEFAULT_LLM_MODEL=claude-opus-4-6
+ANTHROPIC_API_KEY=sk-ant-...
+AUTH_REQUIRED=true
+DEV_SSO_ENABLED=true
 ```
 
-`setup_db.py` reads the CSV via pandas, normalizes column names, and loads into a single `employees` table. The `config.py` variable `CSV_PATH` controls where the CSV is expected — update it if your folder layout differs:
+### Notes
+- `DEV_SSO_ENABLED=true` enables the demo sign-in flow.
+- `AUTH_REQUIRED=false` bypasses the auth shell and resolves the user as local admin.
+- `DEFAULT_OPENAI_COMPAT_BASE_URL` is what makes local Ollama or another OpenAI-compatible server work.
+
+## 6. Prepare The HR Dataset
+
+The repo expects the IBM HR CSV used by [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py).
+
+By default, [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py) expects the CSV one directory above the repo:
 
 ```python
-# config.py
 CSV_PATH = str(Path(__file__).parent.parent / "WA_Fn-UseC_-HR-Employee-Attrition.csv")
 ```
 
----
-
-## 4. Backend Configuration
-
-All configuration lives in `config.py`:
-
-```python
-DB_PATH      = str(BASE_DIR / "hr_data.db")          # SQLite location
-CSV_PATH     = ...                                    # CSV location for setup_db.py
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")   # From .env
-DEFAULT_MODEL     = "claude-opus-4-6"                 # Model used by agent
-MAX_AGENT_ITERATIONS = 10                             # Max loop depth
-```
-
-**Environment variables (`.env` file):**
-
-| Variable | Required | Default | Notes |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | — | Get from console.anthropic.com |
-| `APP_PASSWORD` | No | — | Streamlit UI password gate |
-| `PORT` | No | `8000` | FastAPI server port |
-
----
-
-## 5. Running Locally
-
-### FastAPI backend + HTML/JS frontend (recommended)
+### Steps
+1. Download the CSV.
+2. Place it at the configured path.
+3. Run:
 
 ```bash
-python server.py
+python setup_db.py
 ```
-Open **http://localhost:8000**. The server:
-- Serves `static/index.html` at `/`
-- Streams agent events via SSE at `POST /api/chat`
-- Returns DB stats at `GET /api/stats`
-- Resets conversation at `POST /api/reset`
 
-### Streamlit frontend (legacy)
+This creates:
+- `hr_data.db`
+- `employees` table with the HR analytics dataset
+
+The first application run will also create:
+- `access_control.db`
+- `context_store.db`
+
+## 7. Start The Application Locally
+
+### Recommended path: FastAPI + web UI
+
+```bash
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
+Open:
+- `http://127.0.0.1:8000`
+
+### Legacy path: Streamlit
 
 ```bash
 python -m streamlit run app.py
 ```
-Open **http://localhost:8501**. Enter your API key in the sidebar.
 
-### Windows launchers
+This is still useful for experiments, but the FastAPI + JS app is the primary experience.
 
-| Command | What it does |
-|---|---|
-| `run.bat` | Finds Python, checks DB, launches FastAPI |
-| `run.bat streamlit` | Same but launches Streamlit |
-| `setup_and_run.bat` | Full setup: installs deps + builds DB + launches Streamlit |
+## 8. Validate A Fresh Local Install
 
----
+After starting the server, validate the following:
 
-## 6. Frontend Overview
+### 8.1 Authentication shell
+- the sign-in screen appears
+- Microsoft, Google, and Okta buttons render
 
-The `static/` folder contains three files — no build step, no npm.
+### 8.2 Scoped login flow
+- logging in as Microsoft resolves to a Technology manager
+- logging in as Google resolves to an HR Business Partner
 
-### `index.html`
-- App shell: sidebar + topbar + KPI strip + messages area + input bar
-- Loads Plotly.js from CDN for chart rendering
-- No framework — pure HTML with semantic class names
+### 8.3 Access-scoped UI
+- top KPI cards reflect the signed-in scope
+- example prompts change based on access
+- previous questions appear in the sidebar after asking a question
 
-### `style.css`
-CSS custom properties drive the entire design system:
-```css
---indigo: #6366F1        /* primary brand color */
---sidebar-w: 260px       /* sidebar width */
---topbar-h: 60px         /* header height */
+### 8.4 Chat safety behavior
+Try these prompts:
+- `What is the attrition rate for my scope?`
+- `Generate an active headcount report for my scope`
+- `Write me a poem about Mars`
+
+Expected behavior:
+- the first two work if they match the user's access
+- the third is rejected as out of scope
+
+## 9. How The SSO + Access Model Works Today
+
+Current behavior:
+- the web UI uses a demo SSO experience
+- `POST /api/auth/login` creates a local cookie-backed session
+- the authenticated user email is looked up in `access_control.db`
+
+This means the repo already has the integration seam for enterprise identity:
+- user identity comes from auth
+- authorization comes from a separate data store
+
+For a real bank deployment, replace the demo sign-in with:
+- OIDC via Entra ID, Okta, Ping, or another enterprise IdP
+- a real user profile source
+- an authoritative role/scope mapping source
+
+## 10. Running It On Your Own Server
+
+This section is written for an engineer standing up the application on an internal Linux server.
+
+### 10.1 Create the runtime environment
+
+```bash
+sudo mkdir -p /opt/hr-insights
+sudo chown $USER:$USER /opt/hr-insights
+cd /opt/hr-insights
+git clone https://github.com/BRGandhi/hr-agent-platform.git app
+cd app
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
-Key component classes: `.kpi-card`, `.bubble-user`, `.bubble-ai`, `.tool-card`, `.chart-card`, `.msg-row`.
 
-### `app.js`
-Single-file vanilla JS, no dependencies beyond Plotly (loaded from CDN).
+### 10.2 Create `.env`
 
-Key functions:
-| Function | Purpose |
-|---|---|
-| `init()` | Wires DOM events, restores API key, loads stats |
-| `handleSend()` | Validates input, calls `streamChat()` |
-| `streamChat()` | Reads SSE stream, dispatches events to renderers |
-| `buildToolCard(event)` | Collapsible tool-call HTML card |
-| `buildChartCard(event)` | Plotly chart rendered into a card div |
-| `newConversation()` | Resets server session + clears DOM |
-
-**Session persistence:** `session_id` is stored in `localStorage` so page refreshes reconnect to the same in-memory conversation on the server (until the server restarts).
-
----
-
-## 7. Replacing the Dataset
-
-To point the platform at your own HR data:
-
-### Option A — Different CSV
-1. Put your CSV in the expected location (or update `CSV_PATH` in `config.py`)
-2. Edit `setup_db.py` — update the column mapping to match your schema
-3. Edit `database/schema.py` — update `HR_SCHEMA` with your column descriptions
-4. Edit `agent/prompts.py` if the employee count or key fields differ
-5. Re-run `python setup_db.py`
-
-### Option B — Existing database (PostgreSQL, MySQL, etc.)
-Replace `database/connector.py`. The agent only calls two methods:
-```python
-db.execute_query(sql: str) -> list[dict]
-db.get_table_stats() -> dict   # keys: total_employees, attrited_employees, active_employees, attrition_rate_pct, columns
+```env
+DEFAULT_LLM_PROVIDER=anthropic
+DEFAULT_LLM_MODEL=claude-opus-4-6
+ANTHROPIC_API_KEY=your-key
+SESSION_TTL_MINUTES=120
+AUTH_REQUIRED=true
+DEV_SSO_ENABLED=false
+SSO_PROVIDERS=Microsoft,Google,Okta
 ```
-Implement these two methods for your database and nothing else needs to change.
 
-### Option C — No attrition data at all
-Remove `get_attrition_insights` from `agent/tools.py` and `ToolExecutor`. Update the system prompt in `agent/prompts.py`.
+Important:
+- if `DEV_SSO_ENABLED=false`, the repo currently does not yet complete a real SSO redirect flow
+- you must implement your real IdP integration before using this as a true internal production service
 
----
+### 10.3 Prepare the database
 
-## 8. Customizing the Agent
+Place the CSV and run:
 
-### System prompt (`agent/prompts.py`)
-Controls agent persona, tone, and rules. Key sections:
-- **Capabilities** — what the agent can do
-- **Database Schema** — injected from `database/schema.py` at import time
-- **How to Respond** — when to use each tool
-- **Rules** — SQL safety, citation, chart behavior
-- **Tone & Format** — conciseness, bullet points, key metrics bold
+```bash
+source .venv/bin/activate
+python setup_db.py
+```
 
-### Adding a new tool
+### 10.4 Start with Uvicorn
 
-**Step 1 — Define schema** in `agent/tools.py`:
-```python
-{
-    "name": "my_new_tool",
-    "description": "What this tool does",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "param1": {"type": "string", "description": "..."}
-        },
-        "required": ["param1"]
+```bash
+source .venv/bin/activate
+python -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+### 10.5 Recommended reverse proxy
+
+Put the app behind an internal reverse proxy such as NGINX.
+
+Example `nginx.conf` fragment:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name hr-insights.internal.bank.example;
+
+    ssl_certificate     /etc/ssl/certs/hr-insights.crt;
+    ssl_certificate_key /etc/ssl/private/hr-insights.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
     }
 }
 ```
 
-**Step 2 — Implement handler** in `agent/tool_executor.py`:
-```python
-elif tool_name == "my_new_tool":
-    return self._my_new_tool(tool_input)
-```
-```python
-def _my_new_tool(self, inputs: dict) -> str:
-    # ... your logic ...
-    return json.dumps(result)
-```
+### 10.6 Recommended systemd unit
 
-**Step 3 — Tell the agent** — add a line to the "How to Respond" section in `agent/prompts.py` describing when to use the new tool.
+```ini
+[Unit]
+Description=HR Insights Platform
+After=network.target
 
-### Changing the model
-Update `DEFAULT_MODEL` in `config.py`. Available options:
-- `claude-opus-4-6` — most capable, best for complex analysis (current default)
-- `claude-sonnet-4-5` — faster, lower cost, good for simpler queries
+[Service]
+WorkingDirectory=/opt/hr-insights/app
+EnvironmentFile=/opt/hr-insights/app/.env
+ExecStart=/opt/hr-insights/app/.venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000
+Restart=always
+User=hrplatform
+Group=hrplatform
 
-### Adjusting thinking
-The agent uses `thinking={"type": "adaptive"}` in `orchestrator.py`. Change to `{"type": "disabled"}` to skip thinking tokens (faster/cheaper) or `{"type": "enabled", "budget_tokens": 2000}` for fixed thinking.
-
----
-
-## 9. Production Deployment
-
-### Environment variables to set in production
-
-| Variable | Value |
-|---|---|
-| `ANTHROPIC_API_KEY` | Your production key |
-| `PORT` | Port for your platform (e.g., 8080) |
-| `APP_PASSWORD` | Optional: gates Streamlit UI access |
-
-### Docker
-
-```dockerfile
-# Already provided in Dockerfile
-docker build -t hr-intelligence .
-docker run -p 8000:8000 -e ANTHROPIC_API_KEY=sk-ant-... hr-intelligence
+[Install]
+WantedBy=multi-user.target
 ```
 
-The Dockerfile:
-1. Uses `python:3.12-slim`
-2. Installs requirements
-3. Copies source (excludes `.env`, `hr_data.db`)
-4. Runs `python server.py`
+## 11. What To Replace For A Bank Deployment
 
-**Important:** The database must be built before the image or mounted as a volume:
-```bash
-# Option 1: build DB into image
-COPY WA_Fn-UseC_-HR-Employee-Attrition.csv /data/
-RUN python setup_db.py
+This is the most important section for a regulated internal rollout.
 
-# Option 2: mount existing DB
-docker run -p 8000:8000 -v /path/to/hr_data.db:/app/hr_data.db ...
-```
+### Replace immediately
+- demo SSO flow
+- permissive CORS
+- in-memory sessions
+- development-grade cookie settings
+- SQLite-based access-control authority if your bank already has a source of truth
 
-### Render.com (free tier)
-`render.yaml` is pre-configured. Connect the GitHub repo in the Render dashboard, set `ANTHROPIC_API_KEY` in the Environment tab, and deploy.
+### Strongly consider replacing
+- SQLite memory store
+- SQLite analytics store if connecting to real HR systems
+- direct provider credentials in end-user initiated requests
 
-### Persistent sessions in production
-The current in-memory session store (`_sessions` dict in `server.py`) does **not** survive server restarts. For production, replace it with Redis:
-```python
-# server.py — swap _sessions dict for Redis-backed store
-import redis, pickle
-r = redis.from_url(os.getenv("REDIS_URL"))
+### Add before production
+- centralized logging
+- audit logs for question, access decision, and report generation
+- secrets management
+- backup and retention policies
+- automated tests
+- CI validation for docs, linting, and smoke tests
 
-def _get_session(session_id):
-    data = r.get(f"session:{session_id}")
-    return pickle.loads(data) if data else None
-```
+## 12. How To Change The Data Source
 
----
+### Option A: keep SQLite, replace the CSV
+Update:
+- [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py)
+- [database/schema.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/schema.py)
+- [docs/DATA_DICTIONARY.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/DATA_DICTIONARY.md)
 
-## 10. Upgrading to v2
+### Option B: replace the connector entirely
+Implement the same contract as [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py):
+- `execute_query(sql, access_profile=None)`
+- `get_table_stats(access_profile=None)`
 
-The `hr_intelligence_v2/` directory (included in this repo) is a full production-grade rewrite:
+### Option C: externalize access control
+Replace [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py) with a connector into:
+- HR entitlement tables
+- manager hierarchy systems
+- enterprise IAM or governance sources
 
-| | v1 (this) | v2 |
-|---|---|---|
-| Frontend | Vanilla JS / Streamlit | React 19 + TypeScript + Tailwind |
-| Backend | FastAPI + SQLite | FastAPI + PostgreSQL + pgvector |
-| Auth | None / password gate | Auth0 SSO + RBAC (6 roles) |
-| Agent | Single agent | Orchestrator + 5 specialist agents |
-| Reports | None | Deterministic report engine + PDF export |
-| Connectors | CSV only | CSV + extensible HRIS connectors |
-| Deployment | Single process | Docker Compose multi-container |
+## 13. How To Extend The Agent
 
-See [hr_intelligence_v2/README.md](../hr_intelligence_v2/README.md) and [docs/V2_ARCHITECTURE.md](V2_ARCHITECTURE.md) for the v2 implementation guide.
+### Add a new tool
+1. Add the schema to [agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py)
+2. Implement the handler in [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py)
+3. Update [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
+4. Verify the web UI renders the resulting event type correctly
+
+### Change prompt behavior
+Update [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py).
+
+### Add a new LLM provider
+Extend [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py) with:
+- a new client adapter
+- normalized request/response translation
+- tool-call conversion logic
+
+## 14. Suggested First Tasks For A New Engineer
+
+If you are coming fresh to the project, do these in order:
+1. Clone and run the app locally.
+2. Sign in with each demo provider and observe the scoped differences.
+3. Read [docs/ARCHITECTURE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/ARCHITECTURE.md).
+4. Read [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py) and [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py).
+5. Trace a single request through [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py), [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py), and [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py).
+6. Review [docs/RUNBOOK.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/RUNBOOK.md) to understand operational expectations.
