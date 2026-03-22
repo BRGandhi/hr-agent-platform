@@ -25,29 +25,29 @@ Important: this repo already contains production-oriented patterns, but it still
 At a minimum, understand these files before modifying the platform:
 
 ### Top-level
-- [README.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/README.md): overview and repo map
-- [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py): main backend entry point
-- [app.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/app.py): legacy Streamlit UI
-- [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py): builds `hr_data.db`
-- [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py): environment-driven runtime configuration
+- [README.md](README.md): overview and repo map
+- [server.py](server.py): main backend entry point
+- [app.py](app.py): legacy Streamlit UI
+- [setup_db.py](setup_db.py): builds `hr_data.db`
+- [config.py](config.py): environment-driven runtime configuration
 
 ### Agent
-- [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py)
-- [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py)
-- [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
-- [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py)
-- [agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py)
+- [agent/llm_client.py](agent/llm_client.py)
+- [agent/orchestrator.py](agent/orchestrator.py)
+- [agent/prompts.py](agent/prompts.py)
+- [agent/tool_executor.py](agent/tool_executor.py)
+- [agent/tools.py](agent/tools.py)
 
 ### Data and policy
-- [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py)
-- [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
-- [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py)
-- [database/schema.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/schema.py)
+- [database/connector.py](database/connector.py)
+- [database/access_control.py](database/access_control.py)
+- [database/context_store.py](database/context_store.py)
+- [database/schema.py](database/schema.py)
 
 ### Frontend
-- [static/index.html](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/index.html)
-- [static/app.js](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/app.js)
-- [static/style.css](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/style.css)
+- [static/index.html](static/index.html)
+- [static/app.js](static/app.js)
+- [static/style.css](static/style.css)
 
 ## 3. System Requirements
 
@@ -58,7 +58,7 @@ At a minimum, understand these files before modifying the platform:
 | Disk | 500 MB | 2 GB |
 | Network | outbound access to chosen LLM endpoint | internal reverse proxy + managed egress |
 
-Python dependencies are declared in [requirements.txt](c:/Users/bhavy/Downloads/hr_agent_platform_github/requirements.txt):
+Python dependencies are declared in [requirements.txt](requirements.txt):
 - `fastapi`
 - `uvicorn`
 - `anthropic`
@@ -107,7 +107,7 @@ Copy the example file:
 copy .env.example .env
 ```
 
-The current configurable items are defined in [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py).
+The current configurable items are defined in [config.py](config.py).
 
 ### Recommended development configuration
 
@@ -139,9 +139,9 @@ DEV_SSO_ENABLED=true
 
 ## 6. Prepare The HR Dataset
 
-The repo expects the IBM HR CSV used by [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py).
+The repo expects the IBM HR CSV used by [setup_db.py](setup_db.py).
 
-By default, [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py) expects the CSV one directory above the repo:
+By default, [config.py](config.py) expects the CSV one directory above the repo:
 
 ```python
 CSV_PATH = str(Path(__file__).parent.parent / "WA_Fn-UseC_-HR-Employee-Attrition.csv")
@@ -347,17 +347,17 @@ This is the most important section for a regulated internal rollout.
 
 ### Option A: keep SQLite, replace the CSV
 Update:
-- [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py)
-- [database/schema.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/schema.py)
-- [docs/DATA_DICTIONARY.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/DATA_DICTIONARY.md)
+- [setup_db.py](setup_db.py)
+- [database/schema.py](database/schema.py)
+- [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md)
 
 ### Option B: replace the connector entirely
-Implement the same contract as [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py):
+Implement the same contract as [database/connector.py](database/connector.py):
 - `execute_query(sql, access_profile=None)`
 - `get_table_stats(access_profile=None)`
 
 ### Option C: externalize access control
-Replace [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py) with a connector into:
+Replace [database/access_control.py](database/access_control.py) with a connector into:
 - HR entitlement tables
 - manager hierarchy systems
 - enterprise IAM or governance sources
@@ -365,16 +365,16 @@ Replace [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_
 ## 13. How To Extend The Agent
 
 ### Add a new tool
-1. Add the schema to [agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py)
-2. Implement the handler in [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py)
-3. Update [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
+1. Add the schema to [agent/tools.py](agent/tools.py)
+2. Implement the handler in [agent/tool_executor.py](agent/tool_executor.py)
+3. Update [agent/prompts.py](agent/prompts.py)
 4. Verify the web UI renders the resulting event type correctly
 
 ### Change prompt behavior
-Update [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py).
+Update [agent/prompts.py](agent/prompts.py).
 
 ### Add a new LLM provider
-Extend [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py) with:
+Extend [agent/llm_client.py](agent/llm_client.py) with:
 - a new client adapter
 - normalized request/response translation
 - tool-call conversion logic
@@ -384,7 +384,7 @@ Extend [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/a
 If you are coming fresh to the project, do these in order:
 1. Clone and run the app locally.
 2. Sign in with each demo provider and observe the scoped differences.
-3. Read [docs/ARCHITECTURE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/ARCHITECTURE.md).
-4. Read [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py) and [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py).
-5. Trace a single request through [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py), [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py), and [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py).
-6. Review [docs/RUNBOOK.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/RUNBOOK.md) to understand operational expectations.
+3. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+4. Read [database/access_control.py](database/access_control.py) and [database/context_store.py](database/context_store.py).
+5. Trace a single request through [server.py](server.py), [agent/orchestrator.py](agent/orchestrator.py), and [agent/tool_executor.py](agent/tool_executor.py).
+6. Review [docs/RUNBOOK.md](docs/RUNBOOK.md) to understand operational expectations.

@@ -103,7 +103,7 @@ The following columns should generally be ignored for analysis:
 
 ## 3. `access_control.db`
 
-The access-control database is created by [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py).
+The access-control database is created by [database/access_control.py](database/access_control.py).
 
 ### 3.1 Table: `user_access`
 
@@ -152,7 +152,7 @@ These are useful for local testing, but in a bank deployment they should be repl
 
 ## 4. `context_store.db`
 
-This database is created by [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py).
+This database is created by [database/context_store.py](database/context_store.py).
 
 ### 4.1 Table: `conversation_memory`
 
@@ -206,7 +206,7 @@ Definitions:
 
 ## 6. Access-Controlled Data Domains
 
-Metric domains are mapped to restricted columns in [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py).
+Metric domains are mapped to restricted columns in [database/access_control.py](database/access_control.py).
 
 Examples:
 - compensation domain includes `MonthlyIncome`, `HourlyRate`, `DailyRate`

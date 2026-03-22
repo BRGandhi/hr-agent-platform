@@ -53,7 +53,7 @@ Data stores
 ## 3. Runtime Surfaces
 
 ### 3.1 FastAPI web application
-[server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py) is the main runtime for the modern web app.
+[server.py](server.py) is the main runtime for the modern web app.
 
 Responsibilities:
 - serves `static/` assets
@@ -78,7 +78,7 @@ Primary endpoints:
 - `POST /api/chat`: SSE chat stream
 
 ### 3.2 Web frontend
-The browser frontend lives in [static/index.html](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/index.html), [static/app.js](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/app.js), and [static/style.css](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/style.css).
+The browser frontend lives in [static/index.html](static/index.html), [static/app.js](static/app.js), and [static/style.css](static/style.css).
 
 Responsibilities:
 - authentication shell
@@ -89,7 +89,7 @@ Responsibilities:
 - tool-call, chart, table, and markdown rendering
 
 ### 3.3 Legacy Streamlit frontend
-[app.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/app.py) remains in the repo as a secondary interface. It is still useful for fast experiments, but it does not reflect the same governed auth and access model as the FastAPI + JS frontend.
+[app.py](app.py) remains in the repo as a secondary interface. It is still useful for fast experiments, but it does not reflect the same governed auth and access model as the FastAPI + JS frontend.
 
 ## 4. Request Lifecycle
 
@@ -105,9 +105,9 @@ Responsibilities:
 ### 4.2 Chat request lifecycle
 1. The user enters a question.
 2. The browser posts to `POST /api/chat` with message, provider, model, base URL, API key, and session id.
-3. [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py) resolves the authenticated user and access profile.
+3. [server.py](server.py) resolves the authenticated user and access profile.
 4. The server builds an `LLMConfig` object and gets or creates an `HRAgent`.
-5. [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py) performs:
+5. [agent/orchestrator.py](agent/orchestrator.py) performs:
    - scope validation
    - recent memory lookup
    - context document retrieval
@@ -115,14 +115,14 @@ Responsibilities:
 6. The selected LLM either:
    - returns tool calls, or
    - returns final text
-7. Tool calls are executed through [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py).
+7. Tool calls are executed through [agent/tool_executor.py](agent/tool_executor.py).
 8. Tool results are appended back into the conversation history.
 9. The loop continues until the model returns a final response or the iteration limit is hit.
 10. Final answer, tool artifacts, and memory updates are streamed back to the UI.
 
 ## 5. Provider-Agnostic LLM Layer
 
-[agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py) is the abstraction boundary between the orchestration loop and the upstream model provider.
+[agent/llm_client.py](agent/llm_client.py) is the abstraction boundary between the orchestration loop and the upstream model provider.
 
 ### Anthropic path
 - Uses native Anthropic tool-use blocks
@@ -138,7 +138,7 @@ The orchestrator does not need to know which provider is active. It only consume
 
 ## 6. Orchestration Layer
 
-[agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py) is the core controller.
+[agent/orchestrator.py](agent/orchestrator.py) is the core controller.
 
 Responsibilities:
 - enforces question scope before the model is called
@@ -147,11 +147,11 @@ Responsibilities:
 - runs the tool-call loop
 - stores final responses back into memory
 
-The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py) to limit runaway tool loops.
+The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](config.py) to limit runaway tool loops.
 
 ## 7. Access Control Model
 
-[database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py) defines the current access policy model.
+[database/access_control.py](database/access_control.py) defines the current access policy model.
 
 Each access profile contains:
 - `email`
@@ -176,7 +176,7 @@ This means even if the LLM proposes a broader query, the execution layer still n
 
 ## 8. Context And Memory Layer
 
-[database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py) provides two functions:
+[database/context_store.py](database/context_store.py) provides two functions:
 
 ### 8.1 Conversation memory
 - stores prior user question/response pairs
@@ -188,7 +188,7 @@ This means even if the LLM proposes a broader query, the execution layer still n
 - retrieves documents by token overlap and allowed tags
 - injects matched content into the system prompt
 
-The prompt builder in [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py) merges:
+The prompt builder in [agent/prompts.py](agent/prompts.py) merges:
 - access profile
 - recent memory
 - relevant context docs
@@ -197,7 +197,7 @@ The prompt builder in [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platf
 ## 9. Data Layer
 
 ### 9.1 `hr_data.db`
-Primary analytics database used by [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py). It contains the `employees` table loaded from the IBM HR dataset.
+Primary analytics database used by [database/connector.py](database/connector.py). It contains the `employees` table loaded from the IBM HR dataset.
 
 ### 9.2 `access_control.db`
 SQLite store mapping user emails to access profiles. It is currently seeded with demo identities for Microsoft, Google, and Okta sign-ins.
@@ -209,7 +209,7 @@ SQLite store for:
 
 ## 10. Tool Layer
 
-[agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py) declares the canonical tool schemas used by every provider.
+[agent/tools.py](agent/tools.py) declares the canonical tool schemas used by every provider.
 
 Current tools:
 - `query_hr_database`
@@ -218,7 +218,7 @@ Current tools:
 - `get_attrition_insights`
 - `generate_standard_report`
 
-[agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py) implements their runtime behavior.
+[agent/tool_executor.py](agent/tool_executor.py) implements their runtime behavior.
 
 Important design choice:
 - tools return structured JSON whenever possible so the UI can render tables and charts without guessing
@@ -226,13 +226,13 @@ Important design choice:
 ## 11. UI State And Session Model
 
 ### Browser session state
-[static/app.js](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/app.js) stores:
+[static/app.js](static/app.js) stores:
 - current conversation session id
 - selected provider/model/base URL
 - tool-call visibility preference
 
 ### Server session state
-[server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py) stores:
+[server.py](server.py) stores:
 - `_sessions`: active `HRAgent` instances
 - `_auth_sessions`: current auth sessions
 

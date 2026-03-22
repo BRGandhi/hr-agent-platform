@@ -89,7 +89,7 @@ SQLite stores
   - context_store.db
 ```
 
-For the full architecture walkthrough, see [docs/ARCHITECTURE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/ARCHITECTURE.md).
+For the full architecture walkthrough, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Fresh Start: Clone And Run
 
@@ -158,7 +158,7 @@ DEV_SSO_ENABLED=true
 
 ### 5. Prepare the dataset
 
-Download the IBM HR dataset CSV and place it one folder above the repo, or update `CSV_PATH` in [config.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/config.py).
+Download the IBM HR dataset CSV and place it one folder above the repo, or update `CSV_PATH` in [config.py](config.py).
 
 Then build the SQLite database:
 
@@ -187,40 +187,40 @@ You should then see:
 - previously asked questions in the sidebar
 - the ability to connect an LLM provider from the top banner
 
-For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/IMPLEMENTATION_GUIDE.md).
+For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).
 
 ## Repo Map
 
 ### Runtime entry points
-- [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py): FastAPI app and SSE backend
-- [app.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/app.py): legacy Streamlit frontend
-- [setup_db.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/setup_db.py): CSV-to-SQLite loader
+- [server.py](server.py): FastAPI app and SSE backend
+- [app.py](app.py): legacy Streamlit frontend
+- [setup_db.py](setup_db.py): CSV-to-SQLite loader
 
 ### Agent layer
-- [agent/llm_client.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/llm_client.py): provider adapters
-- [agent/orchestrator.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/orchestrator.py): Think -> Act -> Observe loop
-- [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py): system prompt construction
-- [agent/tool_executor.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tool_executor.py): tool implementations
-- [agent/tools.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/tools.py): tool schemas
+- [agent/llm_client.py](agent/llm_client.py): provider adapters
+- [agent/orchestrator.py](agent/orchestrator.py): Think -> Act -> Observe loop
+- [agent/prompts.py](agent/prompts.py): system prompt construction
+- [agent/tool_executor.py](agent/tool_executor.py): tool implementations
+- [agent/tools.py](agent/tools.py): tool schemas
 
 ### Data and policy layer
-- [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py): scoped SQLite query layer
-- [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py): role and scope resolution
-- [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py): memory and context docs
-- [database/schema.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/schema.py): schema prompt reference
+- [database/connector.py](database/connector.py): scoped SQLite query layer
+- [database/access_control.py](database/access_control.py): role and scope resolution
+- [database/context_store.py](database/context_store.py): memory and context docs
+- [database/schema.py](database/schema.py): schema prompt reference
 
 ### Frontend
-- [static/index.html](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/index.html): web UI shell
-- [static/app.js](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/app.js): client behavior and SSE rendering
-- [static/style.css](c:/Users/bhavy/Downloads/hr_agent_platform_github/static/style.css): visual system
+- [static/index.html](static/index.html): web UI shell
+- [static/app.js](static/app.js): client behavior and SSE rendering
+- [static/style.css](static/style.css): visual system
 
 ## Documentation Guide
 
-- [docs/ARCHITECTURE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/ARCHITECTURE.md): detailed system architecture, trust boundaries, and request lifecycle
-- [docs/IMPLEMENTATION_GUIDE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/IMPLEMENTATION_GUIDE.md): fresh-clone setup and server deployment instructions
-- [docs/RUNBOOK.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/RUNBOOK.md): day-2 operations, health checks, and incident handling
-- [docs/DATA_DICTIONARY.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/DATA_DICTIONARY.md): logical data model and store definitions
-- [docs/CODE_LOG.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/CODE_LOG.md): implementation history and major design decisions
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): detailed system architecture, trust boundaries, and request lifecycle
+- [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md): fresh-clone setup and server deployment instructions
+- [docs/RUNBOOK.md](docs/RUNBOOK.md): day-2 operations, health checks, and incident handling
+- [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): logical data model and store definitions
+- [docs/CODE_LOG.md](docs/CODE_LOG.md): implementation history and major design decisions
 
 ## Configuration Reference
 
@@ -258,7 +258,7 @@ This repository is useful as a bank-internal prototype or reference implementati
 - define retention and purge policies for stored conversation memory
 
 ### Network and API hardening
-- tighten `allow_origins=["*"]` CORS in [server.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/server.py)
+- tighten `allow_origins=["*"]` CORS in [server.py](server.py)
 - use TLS termination and internal reverse proxies
 - route provider credentials through approved secret-management tooling
 
@@ -267,4 +267,4 @@ This repository is useful as a bank-internal prototype or reference implementati
 - add request timeouts and rate limits
 - add automated tests for auth, tooling, access controls, and SSE flows
 
-These gaps are documented in more detail in [docs/RUNBOOK.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/RUNBOOK.md) and [docs/IMPLEMENTATION_GUIDE.md](c:/Users/bhavy/Downloads/hr_agent_platform_github/docs/IMPLEMENTATION_GUIDE.md).
+These gaps are documented in more detail in [docs/RUNBOOK.md](docs/RUNBOOK.md) and [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).

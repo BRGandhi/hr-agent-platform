@@ -334,18 +334,18 @@ This section is especially relevant for internal bank use.
 ### Scenario: users see wrong data scope
 1. Inspect the user email resolved by auth
 2. Inspect `access_control.db`
-3. Verify department scoping behavior in [database/connector.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/connector.py)
-4. Verify metric restrictions in [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
+3. Verify department scoping behavior in [database/connector.py](database/connector.py)
+4. Verify metric restrictions in [database/access_control.py](database/access_control.py)
 
 ### Scenario: out-of-scope filtering is too aggressive
-1. Review keyword-based scope logic in [database/access_control.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/access_control.py)
-2. Review prompt instructions in [agent/prompts.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/agent/prompts.py)
+1. Review keyword-based scope logic in [database/access_control.py](database/access_control.py)
+2. Review prompt instructions in [agent/prompts.py](agent/prompts.py)
 3. Test with a clearer HR-specific prompt
 
 ### Scenario: memory quality is poor
 1. Inspect documents in `context_store.db`
 2. Add or update context docs through `/api/context/documents`
-3. Review retrieval behavior in [database/context_store.py](c:/Users/bhavy/Downloads/hr_agent_platform_github/database/context_store.py)
+3. Review retrieval behavior in [database/context_store.py](database/context_store.py)
 
 ## 13. Recommended Production Hardening Backlog
 
