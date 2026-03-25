@@ -1,6 +1,11 @@
 /**
  * HR Intelligence Platform frontend.
  * Enforces the auth shell, scope-aware UX, and banner-based LLM connection flow.
+ *
+ * Security notes:
+ * - API keys can be provided in the UI for the current browser session
+ * - Server-side environment keys still work as the fallback path
+ * - Auth modal is non-dismissible until authenticated
  */
 
 const state = {
@@ -16,7 +21,14 @@ const state = {
   authProviders: [],
   user: null,
   accessProfile: null,
+  lastTable: null,
+  pendingTableContext: null,
+  feedbackByMemory: {},
+  activeTopic: "",
 };
+
+const TABLE_VISUAL_MAX_ROWS = 12;
+const TABLE_VISUAL_MAX_COLUMNS = 4;
 
 const $ = (id) => document.getElementById(id);
 const authShell = $("authShell");
@@ -30,6 +42,7 @@ const providerSelect = $("providerSelect");
 const modelInput = $("modelInput");
 const baseUrlLabel = $("baseUrlLabel");
 const baseUrlInput = $("baseUrlInput");
+const apiKeyLabel = $("apiKeyLabel");
 const apiKeyInput = $("apiKeyInput");
 const showToolCalls = $("showToolCalls");
 const chatInput = $("chatInput");
@@ -48,12 +61,13 @@ const menuToggle = $("menuToggle");
 const sidebar = $("sidebar");
 const toast = $("toast");
 const topbarSub = $("topbarSub");
-const scopePill = $("scopePill");
 const connectLlmBtn = $("connectLlmBtn");
 const userBadge = $("userBadge");
 const logoutBtn = $("logoutBtn");
+const llmModalNote = $("llmModalNote");
 const suggestionGrid = document.querySelector(".suggestion-grid");
 const metricExamplesEl = $("metricExamples");
+const topicSuggestionsEl = $("topicSuggestions");
 
 (async function init() {
   showToolCalls.checked = state.showToolCalls;
@@ -83,6 +97,7 @@ function wireUiEvents() {
     state.baseUrl = baseUrlInput.value.trim();
     localStorage.setItem("hr_base_url", state.baseUrl);
   });
+  apiKeyInput.addEventListener("input", updateConnectionButton);
   showToolCalls.addEventListener("change", () => {
     state.showToolCalls = showToolCalls.checked;
     localStorage.setItem("hr_show_tool_calls", String(state.showToolCalls));
@@ -103,16 +118,57 @@ function wireUiEvents() {
   llmModalBackdrop.addEventListener("click", closeLlmModal);
 
   document.addEventListener("click", (event) => {
+    if (handleDynamicButtonClick(event)) {
+      return;
+    }
     if (window.innerWidth <= 768 && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
       sidebar.classList.remove("open");
     }
   });
 
+  // Escape closes LLM modal only — auth modal is non-dismissible
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeLlmModal();
     }
   });
+}
+
+function handleDynamicButtonClick(event) {
+  const promptButton = event.target.closest("[data-q]");
+  if (promptButton) {
+    const question = promptButton.dataset.q;
+    if (!question) return true;
+    chatInput.value = question;
+    onInputChange();
+    handleSend();
+    return true;
+  }
+
+  const topicButton = event.target.closest(".metric-chip");
+  if (topicButton && metricExamplesEl?.contains(topicButton)) {
+    const topic = topicButton.dataset.topic || "";
+    state.activeTopic = topic;
+    metricExamplesEl.querySelectorAll(".metric-chip").forEach((chip) => {
+      const isActive = chip === topicButton;
+      chip.classList.toggle("active", isActive);
+      chip.setAttribute("aria-pressed", String(isActive));
+    });
+    renderTopicSuggestions(topic, state.accessProfile);
+    return true;
+  }
+
+  const feedbackButton = event.target.closest(".feedback-btn");
+  if (feedbackButton) {
+    const bar = feedbackButton.closest(".feedback-bar");
+    const vote = feedbackButton.dataset.vote;
+    const memoryId = Number(bar?.dataset.memoryId || 0);
+    if (!bar || !vote || !memoryId) return true;
+    submitFeedback(memoryId, vote, bar);
+    return true;
+  }
+
+  return false;
 }
 
 async function loadRuntimeConfig() {
@@ -178,7 +234,8 @@ async function loadAccessSummary() {
         handleUnauthorized();
         return false;
       }
-      throw new Error("Could not load access profile");
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || "Could not load access profile");
     }
 
     const payload = await response.json();
@@ -264,16 +321,7 @@ function syncAuthUi() {
 }
 
 function syncScopeUi() {
-  if (state.accessProfile) {
-    const departments = state.accessProfile.allowed_departments || [];
-    scopePill.textContent = departments.length
-      ? `Business Units | ${departments.join(", ")}`
-      : "Business Units | Enterprise";
-    scopePill.classList.remove("hidden");
-  } else {
-    scopePill.textContent = "";
-    scopePill.classList.add("hidden");
-  }
+  return;
 }
 
 function showAuthShell() {
@@ -442,7 +490,116 @@ function renderMetricExamples(profile) {
     metrics.push("Access policy guidance");
   }
 
-  metricExamplesEl.innerHTML = metrics.map((metric) => `<div class="metric-chip">${escHtml(metric)}</div>`).join("");
+  state.activeTopic = "";
+  clearTopicSuggestions();
+  metricExamplesEl.innerHTML = metrics.map((metric) => `
+    <button
+      class="metric-chip"
+      type="button"
+      data-topic="${escAttr(metric)}"
+      aria-pressed="false"
+    >${escHtml(metric)}</button>
+  `).join("");
+}
+
+function clearTopicSuggestions() {
+  if (!topicSuggestionsEl) return;
+  topicSuggestionsEl.innerHTML = "";
+  topicSuggestionsEl.classList.add("hidden");
+}
+
+function renderTopicSuggestions(topic, profile) {
+  if (!topicSuggestionsEl) return;
+
+  const prompts = buildTopicQuestions(topic, profile);
+  if (!prompts.length) {
+    clearTopicSuggestions();
+    return;
+  }
+
+  topicSuggestionsEl.classList.remove("hidden");
+  topicSuggestionsEl.innerHTML = `
+    <div class="topic-suggestions-header">
+      <div class="topic-suggestions-kicker">Topic Starters</div>
+      <div class="topic-suggestions-title">${escHtml(topic)}</div>
+      <div class="topic-suggestions-sub">Try one of these scoped HR questions next.</div>
+    </div>
+    <div class="topic-suggestions-list"></div>
+  `;
+  renderPromptButtons(topicSuggestionsEl.querySelector(".topic-suggestions-list"), "topic-prompt-btn", prompts);
+  topicSuggestionsEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function buildTopicQuestions(topic, profile) {
+  const normalizedTopic = String(topic || "").toLowerCase();
+  const scopeName = profile?.scope_name || "my scope";
+  const departments = profile?.allowed_departments || [];
+  const primaryScope = departments.length === 1 ? departments[0] : scopeName;
+
+  const templates = {
+    "headcount": [
+      `What is the current headcount for ${primaryScope}?`,
+      `Show headcount by department for ${scopeName}`,
+      `Which job roles have the highest headcount in ${scopeName}?`,
+      `Turn the headcount breakdown for ${scopeName} into a visualization`,
+    ],
+    "active workforce": [
+      `How many active employees are in ${scopeName}?`,
+      `Generate an active headcount report for ${scopeName}`,
+      `Show active workforce by department for ${scopeName}`,
+      `Which teams in ${scopeName} have the largest active workforce?`,
+    ],
+    "department mix": [
+      `What is the department mix for ${scopeName}?`,
+      `Show department share of headcount for ${scopeName}`,
+      `Which departments are growing or shrinking in ${scopeName}?`,
+      `Create a chart of the department mix for ${scopeName}`,
+    ],
+    "attrition rate": [
+      `What is the attrition rate for ${scopeName}?`,
+      `Show attrition rate by department for ${scopeName}`,
+      `Which teams in ${scopeName} have the highest attrition risk?`,
+      `Visualize attrition rate trends for ${scopeName}`,
+    ],
+    "attrited employee roster": [
+      `Generate an attrition report for ${scopeName}`,
+      `Show the attrited employee roster for ${scopeName}`,
+      `Which job roles appear most often in the attrited employee roster for ${scopeName}?`,
+      `Turn the attrited employee roster summary for ${scopeName} into a chart`,
+    ],
+    "attrition by department": [
+      `Show attrition by department for ${scopeName}`,
+      `Which department has the highest attrition in ${scopeName}?`,
+      `Create a visualization of attrition by department for ${scopeName}`,
+      `Compare headcount and attrition by department for ${scopeName}`,
+    ],
+    "tenure mix": [
+      `What does tenure look like in ${scopeName}?`,
+      `Show tenure mix by department for ${scopeName}`,
+      `Which teams in ${scopeName} have the shortest average tenure?`,
+      `Visualize the tenure mix for ${scopeName}`,
+    ],
+    "satisfaction pulse": [
+      `Are there satisfaction risks in ${scopeName}?`,
+      `Show job satisfaction by department for ${scopeName}`,
+      `Which groups in ${scopeName} have the lowest work-life balance scores?`,
+      `Create a satisfaction visualization for ${scopeName}`,
+    ],
+    "compensation bands": [
+      `Show compensation bands for ${scopeName}`,
+      `Which departments in ${scopeName} skew toward higher compensation bands?`,
+      `Visualize compensation bands for ${scopeName}`,
+      `Compare compensation bands and attrition for ${scopeName}`,
+    ],
+    "access policy guidance": [
+      "Which HR access policy applies to my role?",
+      "What data domains can I access in this platform?",
+      "Which HR document tags are available to my role?",
+      "Summarize the access rules for my role in this platform",
+    ],
+  };
+
+  return templates[normalizedTopic] || [];
 }
 
 function renderPromptButtons(container, className, prompts, rich = false) {
@@ -450,26 +607,16 @@ function renderPromptButtons(container, className, prompts, rich = false) {
 
   if (rich) {
     container.innerHTML = prompts.map((prompt) => `
-      <button class="${className}" data-q="${escAttr(prompt)}">
+      <button type="button" class="${className}" data-q="${escAttr(prompt)}">
         <span class="suggestion-icon">${suggestionIcon(prompt)}</span>
         <span>${escHtml(prompt)}</span>
       </button>
     `).join("");
   } else {
     container.innerHTML = prompts.map((prompt) => `
-      <button class="${className}" data-q="${escAttr(prompt)}">${escHtml(prompt)}</button>
+      <button type="button" class="${className}" data-q="${escAttr(prompt)}">${escHtml(prompt)}</button>
     `).join("");
   }
-
-  container.querySelectorAll(`[data-q]`).forEach((button) => {
-    button.addEventListener("click", () => {
-      const question = button.dataset.q;
-      if (!question) return;
-      chatInput.value = question;
-      onInputChange();
-      handleSend();
-    });
-  });
 }
 
 function suggestionIcon(prompt) {
@@ -503,7 +650,7 @@ function syncProviderFields() {
   const providerOption = getProviderOption(state.provider);
   modelInput.placeholder = providerOption?.model_placeholder || "Model name";
   baseUrlInput.placeholder = providerOption?.base_url_placeholder || "Base URL";
-  apiKeyInput.placeholder = providerOption?.api_key_placeholder || "Credential";
+  apiKeyInput.placeholder = providerOption?.api_key_placeholder || "API key";
 
   const showBaseUrl = state.provider !== "anthropic";
   baseUrlLabel.style.display = showBaseUrl ? "block" : "none";
@@ -525,7 +672,8 @@ function closeLlmModal() {
 function updateConnectionButton() {
   const label = providerLabel(state.provider);
   const modelLabel = state.model || "Select model";
-  connectLlmBtn.textContent = `${label} | ${truncate(modelLabel, 22)}`;
+  const keyLabel = apiKeyInput.value.trim() ? " | key set" : "";
+  connectLlmBtn.textContent = `${label} | ${truncate(modelLabel, 22)}${keyLabel}`;
 }
 
 function updateTopbarSub() {
@@ -555,6 +703,7 @@ async function handleSend() {
 
   const text = chatInput.value.trim();
   if (!text || state.isLoading) return;
+  const tableContext = buildOutgoingTableContext(text);
 
   const payload = {
     message: text,
@@ -563,7 +712,10 @@ async function handleSend() {
     model: modelInput.value.trim(),
     base_url: baseUrlInput.value.trim(),
     session_id: state.sessionId,
+    table_context_title: tableContext?.title || "",
+    table_context_rows: tableContext?.rows || [],
   };
+  state.pendingTableContext = null;
 
   chatInput.value = "";
   chatInput.style.height = "auto";
@@ -605,6 +757,9 @@ async function streamChat(payload, contentWrap) {
     if (response.status === 401) {
       handleUnauthorized();
       throw new Error("Please sign in to continue.");
+    }
+    if (response.status === 429) {
+      throw new Error("Rate limit exceeded. Please wait a moment and try again.");
     }
     const error = await response.json().catch(() => ({}));
     throw new Error(error.detail || `HTTP ${response.status}`);
@@ -655,11 +810,30 @@ async function streamChat(payload, contentWrap) {
           break;
         case "tool_result":
           if (event.table_data) {
+            state.lastTable = buildTableContext(event.title || "Query Preview", event.table_data);
             typingEl.remove();
-            contentWrap.appendChild(buildTableCard(event.title || "Query Preview", event.table_data));
+            contentWrap.appendChild(buildTableCard(event.title || "Query Preview", event.table_data, {
+              toolName: event.name || "",
+              reportType: event.report_type || "",
+              tableTotalRows: Number(event.table_total_rows || 0),
+            }));
             contentWrap.appendChild(typingEl);
             scrollToBottom();
           }
+          break;
+        case "helpful_memories":
+          if (Array.isArray(event.items) && event.items.length) {
+            typingEl.remove();
+            contentWrap.appendChild(buildHelpfulMemoriesCard(event.items));
+            contentWrap.appendChild(typingEl);
+            scrollToBottom();
+          }
+          break;
+        case "visual_options":
+          typingEl.remove();
+          contentWrap.appendChild(buildVisualOptionsCard(event));
+          contentWrap.appendChild(typingEl);
+          scrollToBottom();
           break;
         case "chart":
           typingEl.remove();
@@ -670,7 +844,10 @@ async function streamChat(payload, contentWrap) {
         case "final_text":
           typingEl.remove();
           if (event.text) {
-            contentWrap.appendChild(buildMarkdownBubble(event.text));
+            if (event.memory_id) {
+              state.feedbackByMemory[event.memory_id] = event.feedback_score || 0;
+            }
+            contentWrap.appendChild(buildMarkdownBubble(event.text, event.memory_id, event.feedback_score || 0));
             scrollToBottom();
           }
           break;
@@ -743,7 +920,6 @@ function buildToolCard(event) {
 function buildChartCard(event) {
   const card = document.createElement("div");
   card.className = "chart-card";
-  const chartId = `chart-${Math.random().toString(36).slice(2)}`;
 
   if (event.title) {
     const title = document.createElement("div");
@@ -754,35 +930,104 @@ function buildChartCard(event) {
 
   const container = document.createElement("div");
   container.className = "chart-container";
-  container.id = chartId;
   card.appendChild(container);
-
-  requestAnimationFrame(() => {
-    if (typeof Plotly === "undefined") {
-      container.textContent = "(Plotly not loaded - chart unavailable)";
-      return;
-    }
-
-    try {
-      const fig = JSON.parse(event.chart_json);
-      const layout = Object.assign({
-        paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: "rgba(0,0,0,0)",
-        font: { family: "Inter, sans-serif", size: 12, color: "#475569" },
-        margin: { t: 20, r: 16, b: 40, l: 40 },
-        showlegend: true,
-        legend: { orientation: "h", y: -0.25 },
-      }, fig.layout || {});
-      Plotly.newPlot(chartId, fig.data || [], layout, { responsive: true, displayModeBar: false });
-    } catch (error) {
-      container.textContent = `Chart render error: ${error.message}`;
-    }
-  });
+  renderPlotlyFigure(container, event.chart_json);
 
   return card;
 }
 
-function buildTableCard(title, rows) {
+function buildTableMetaLabel(rowCount, meta = {}) {
+  const totalRows = Number(meta.tableTotalRows || 0);
+  if (totalRows > rowCount) {
+    return `${rowCount.toLocaleString()} of ${totalRows.toLocaleString()} rows shown`;
+  }
+  return `${rowCount.toLocaleString()} rows shown`;
+}
+
+function looksLikeIdentifierColumn(columnName) {
+  return /(employee|id\b|identifier|number|email|name|label)/i.test(String(columnName || ""));
+}
+
+function parseNumericValue(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/,/g, "").replace(/%$/, "");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isMostlyNumericColumn(rows, columnName) {
+  let populated = 0;
+  let numeric = 0;
+  rows.slice(0, 12).forEach((row) => {
+    const value = row?.[columnName];
+    if (value === null || value === undefined || String(value).trim() === "") return;
+    populated += 1;
+    if (parseNumericValue(value) !== null) numeric += 1;
+  });
+  return populated > 0 && numeric / populated >= 0.7;
+}
+
+function isVisualizationCandidate(rows) {
+  if (!Array.isArray(rows) || rows.length < 2 || rows.length > TABLE_VISUAL_MAX_ROWS) return false;
+
+  const columns = Object.keys(rows[0] || {});
+  if (columns.length < 2 || columns.length > TABLE_VISUAL_MAX_COLUMNS) return false;
+  if (columns.some(looksLikeIdentifierColumn)) return false;
+
+  const numericColumns = columns.filter((column) => isMostlyNumericColumn(rows, column));
+  const dimensionColumns = columns.filter((column) => !numericColumns.includes(column));
+  return numericColumns.length >= 1 && dimensionColumns.length >= 1;
+}
+
+function getTableAction(title, rows, meta = {}) {
+  if (meta.reportType) {
+    return {
+      kind: "download_excel",
+      label: "Download Excel",
+      reportType: meta.reportType,
+    };
+  }
+
+  if (isVisualizationCandidate(rows)) {
+    return {
+      kind: "visualize",
+      label: "Visual options",
+    };
+  }
+
+  return null;
+}
+
+async function downloadReportExcel(reportType, title) {
+  try {
+    const response = await fetch("/api/reports/export/excel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ report_type: reportType, title }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${String(title || "report").trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || "report"}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("Excel download started.");
+  } catch (error) {
+    showToast(error.message || "Could not download the Excel report.", true);
+  }
+}
+
+function buildTableCard(title, rows, meta = {}) {
   const card = document.createElement("div");
   card.className = "table-wrap";
 
@@ -791,6 +1036,8 @@ function buildTableCard(title, rows) {
     return card;
   }
 
+  const tableContext = buildTableContext(title, rows);
+  const action = getTableAction(title, rows, meta);
   const columns = Object.keys(rows[0]);
   const head = columns.map((column) => `<th>${escHtml(column)}</th>`).join("");
   const body = rows.map((row) => {
@@ -799,7 +1046,13 @@ function buildTableCard(title, rows) {
   }).join("");
 
   card.innerHTML = `
-    <div class="table-title">${escHtml(title)}</div>
+    <div class="table-header">
+      <div>
+        <div class="table-title">${escHtml(title)}</div>
+        <div class="table-meta">${escHtml(buildTableMetaLabel(rows.length, meta))}</div>
+      </div>
+      ${action ? `<div class="table-actions"><button class="table-action-btn" type="button">${escHtml(action.label)}</button></div>` : ""}
+    </div>
     <div class="table-scroll">
       <table>
         <thead><tr>${head}</tr></thead>
@@ -807,14 +1060,226 @@ function buildTableCard(title, rows) {
       </table>
     </div>
   `;
+  const actionButton = card.querySelector(".table-action-btn");
+  if (actionButton && action?.kind === "visualize") {
+    actionButton.addEventListener("click", () => requestVisualizationOptions(tableContext));
+  }
+  if (actionButton && action?.kind === "download_excel") {
+    actionButton.addEventListener("click", () => downloadReportExcel(action.reportType, title));
+  }
   return card;
 }
 
-function buildMarkdownBubble(text) {
+function buildVisualOptionsCard(event) {
+  const card = document.createElement("div");
+  card.className = "visual-options-card";
+  const options = Array.isArray(event.options) ? event.options : [];
+
+  if (!options.length) {
+    card.innerHTML = '<div class="visual-options-empty">No visualization options were returned.</div>';
+    return card;
+  }
+
+  const recommendedId = event.recommended_option_id || options[0].id;
+  card.innerHTML = `
+    <div class="visual-options-header">
+      <div class="visual-options-kicker">Visualization Studio</div>
+      <div class="visual-options-title">${escHtml(event.title || "Visualization options")}</div>
+      <div class="visual-options-sub">Compare a few polished chart directions before committing to one.</div>
+    </div>
+    <div class="visual-options-grid"></div>
+    <div class="visual-preview">
+      <div class="visual-preview-copy">
+        <div class="visual-preview-title"></div>
+        <div class="visual-preview-reason"></div>
+      </div>
+      <div class="chart-container visual-preview-chart"></div>
+    </div>
+  `;
+
+  const grid = card.querySelector(".visual-options-grid");
+  const previewTitle = card.querySelector(".visual-preview-title");
+  const previewReason = card.querySelector(".visual-preview-reason");
+  const previewChart = card.querySelector(".visual-preview-chart");
+
+  const setActiveOption = (option) => {
+    grid.querySelectorAll(".visual-option-btn").forEach((button) => {
+      button.classList.toggle("active", button.dataset.optionId === option.id);
+    });
+    previewTitle.textContent = option.title || chartTypeLabel(option.chart_type);
+    previewReason.textContent = option.reason || "A recommended way to visualize this table.";
+    renderPlotlyFigure(previewChart, option.chart_json);
+  };
+
+  options.forEach((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-option-btn";
+    button.dataset.optionId = option.id;
+    button.innerHTML = `
+      <span class="visual-option-topline">
+        <span class="visual-option-type">${escHtml(chartTypeLabel(option.chart_type))}</span>
+        ${option.id === recommendedId ? '<span class="visual-option-badge">Recommended</span>' : ""}
+      </span>
+      <span class="visual-option-title">${escHtml(option.title || chartTypeLabel(option.chart_type))}</span>
+      <span class="visual-option-reason">${escHtml(option.reason || "")}</span>
+    `;
+    button.addEventListener("click", () => setActiveOption(option));
+    grid.appendChild(button);
+  });
+
+  setActiveOption(options.find((option) => option.id === recommendedId) || options[0]);
+  return card;
+}
+
+function renderPlotlyFigure(container, chartJson) {
+  container.textContent = "";
+  requestAnimationFrame(() => {
+    if (typeof Plotly === "undefined") {
+      container.textContent = "(Plotly not loaded - chart unavailable)";
+      return;
+    }
+
+    try {
+      const fig = JSON.parse(chartJson);
+      const layout = Object.assign({
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(248,251,255,0.9)",
+        font: { family: "Inter, sans-serif", size: 12, color: "#475569" },
+        margin: { t: 20, r: 16, b: 42, l: 46 },
+        showlegend: true,
+        legend: { orientation: "h", y: -0.22, x: 0 },
+      }, fig.layout || {});
+      delete layout.title;
+      Plotly.newPlot(container, fig.data || [], layout, {
+        responsive: true,
+        displayModeBar: false,
+        displaylogo: false,
+      });
+    } catch (error) {
+      container.textContent = `Chart render error: ${error.message}`;
+    }
+  });
+}
+
+function buildTableContext(title, rows) {
+  return {
+    title: title || "Query Preview",
+    rows: Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [],
+  };
+}
+
+function buildOutgoingTableContext(message) {
+  if (state.pendingTableContext?.rows?.length) {
+    return buildTableContext(state.pendingTableContext.title, state.pendingTableContext.rows);
+  }
+  if (state.lastTable?.rows?.length && shouldAttachTableContext(message)) {
+    return buildTableContext(state.lastTable.title, state.lastTable.rows);
+  }
+  return null;
+}
+
+function shouldAttachTableContext(message) {
+  const lowered = String(message || "").toLowerCase();
+  const asksForVisual = /\b(chart|graph|visual|visualize|visualization|plot|dashboard|option|options)\b/.test(lowered);
+  const referencesPriorResult = /\b(this|that|it|above|previous|latest|table|result)\b/.test(lowered)
+    || /\bturn\b.*\binto\b/.test(lowered)
+    || /\bconvert\b/.test(lowered);
+  return asksForVisual && referencesPriorResult;
+}
+
+function requestVisualizationOptions(tableContext) {
+  if (!tableContext?.rows?.length) return;
+  state.pendingTableContext = buildTableContext(tableContext.title, tableContext.rows);
+  chatInput.value = "Suggest 3 top-quality visualization options for this table and recommend the best one.";
+  onInputChange();
+  handleSend();
+}
+
+function chartTypeLabel(chartType) {
+  return String(chartType || "chart")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildHelpfulMemoriesCard(items) {
+  const card = document.createElement("div");
+  card.className = "helpful-memories-card";
+  card.innerHTML = `
+    <div class="helpful-memories-kicker">Helpful From Past Chats</div>
+    <div class="helpful-memories-title">You previously liked answers to similar HR questions</div>
+    <div class="helpful-memories-list"></div>
+  `;
+
+  const list = card.querySelector(".helpful-memories-list");
+  items.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "helpful-memory-item";
+    button.dataset.q = item.question || "";
+    button.innerHTML = `
+      <span class="helpful-memory-question">${escHtml(item.question || "Helpful HR answer")}</span>
+      <span class="helpful-memory-response">${escHtml((item.response || "").trim())}</span>
+    `;
+    list.appendChild(button);
+  });
+
+  return card;
+}
+
+function buildMarkdownBubble(text, memoryId = null, feedbackScore = 0) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "assistant-response";
+
   const bubble = document.createElement("div");
   bubble.className = "bubble-ai";
   bubble.innerHTML = markdownToHtml(text);
-  return bubble;
+  wrapper.appendChild(bubble);
+
+  if (memoryId) {
+    wrapper.appendChild(buildFeedbackBar(memoryId, feedbackScore));
+  }
+
+  return wrapper;
+}
+
+function buildFeedbackBar(memoryId, feedbackScore = 0) {
+  const bar = document.createElement("div");
+  bar.className = "feedback-bar";
+  bar.dataset.memoryId = String(memoryId);
+  bar.innerHTML = `
+    <span class="feedback-label">Was this helpful?</span>
+    <button type="button" class="feedback-btn${feedbackScore > 0 ? " active" : ""}" data-vote="yes" aria-label="Yes, this was helpful">Yes</button>
+    <button type="button" class="feedback-btn${feedbackScore < 0 ? " active" : ""}" data-vote="no" aria-label="No, this was not helpful">No</button>
+  `;
+
+  return bar;
+}
+
+async function submitFeedback(memoryId, vote, bar) {
+  try {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memory_id: memoryId, vote }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const feedbackScore = Number(payload.feedback_score || 0);
+    state.feedbackByMemory[memoryId] = feedbackScore;
+    bar.querySelectorAll(".feedback-btn").forEach((button) => {
+      const buttonVote = button.dataset.vote;
+      const isActive = (buttonVote === "yes" && feedbackScore > 0) || (buttonVote === "no" && feedbackScore < 0);
+      button.classList.toggle("active", isActive);
+    });
+    showToast(feedbackScore > 0 ? "Saved as a helpful response." : "Thanks. We'll avoid reusing that answer as a good example.");
+  } catch (error) {
+    showToast(error.message || "Could not save feedback.", true);
+  }
 }
 
 function markdownToHtml(markdown) {
@@ -948,6 +1413,12 @@ async function newConversation() {
 }
 
 function resetConversationUi() {
+  state.lastTable = null;
+  state.pendingTableContext = null;
+  state.feedbackByMemory = {};
+  state.activeTopic = "";
+  metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => chip.classList.remove("active"));
+  clearTopicSuggestions();
   const thread = messagesEl.querySelector(".msg-thread");
   if (thread) thread.remove();
   if (emptyState) emptyState.style.display = "";
@@ -956,6 +1427,11 @@ function resetConversationUi() {
 function handleUnauthorized() {
   state.user = null;
   state.accessProfile = null;
+  state.lastTable = null;
+  state.pendingTableContext = null;
+  state.feedbackByMemory = {};
+  state.activeTopic = "";
+  clearTopicSuggestions();
   syncAuthUi();
   syncScopeUi();
   showAuthShell();

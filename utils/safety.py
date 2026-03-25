@@ -3,11 +3,23 @@ SQL safety validation layer.
 Blocks any non-SELECT or destructive SQL before it reaches the database.
 """
 
+import re
+
 BLOCKED_KEYWORDS = [
     "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "TRUNCATE",
     "CREATE", "GRANT", "REVOKE", "ATTACH", "DETACH",
-    "--", ";--", "/*", "*/",
-    "PRAGMA",  # block schema-altering pragmas
+    "PRAGMA", "EXEC", "EXECUTE", "VACUUM", "REINDEX",
+    "UNION",  # prevent scope bypass via UNION injection
+    "INTO",   # block SELECT INTO
+    "LOAD_EXTENSION",
+]
+
+BLOCKED_PATTERNS = [
+    r"--",      # single-line comment
+    r";--",
+    r"/\*",     # block comment open
+    r"\*/",     # block comment close
+    r";",       # multiple statements
 ]
 
 # Max rows returned per query to prevent memory issues
@@ -27,8 +39,14 @@ def validate_sql(query: str) -> tuple[bool, str]:
     if not upper.startswith("SELECT"):
         return False, "Query must start with SELECT. Only read-only queries are allowed."
 
+    # Check for blocked patterns (comments, semicolons)
+    for pattern in BLOCKED_PATTERNS:
+        if re.search(pattern, stripped):
+            return False, f"Blocked pattern detected: '{pattern}'. Only simple SELECT queries are allowed."
+
+    # Check for blocked keywords (word-boundary matching to reduce false positives)
     for keyword in BLOCKED_KEYWORDS:
-        if keyword in upper:
+        if re.search(rf"\b{keyword}\b", upper):
             return False, f"Blocked keyword detected: '{keyword}'. Only SELECT queries are allowed."
 
     # Auto-add LIMIT if missing to prevent huge result sets

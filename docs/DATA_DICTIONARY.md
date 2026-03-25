@@ -21,6 +21,7 @@ Authorization database mapping signed-in users to role and scope.
 ### 1.3 `context_store.db`
 Memory and context database containing:
 - recent conversation history
+- feedback on saved responses
 - HR policy and schema documents
 
 ## 2. `hr_data.db`
@@ -163,10 +164,16 @@ This database is created by [database/context_store.py](database/context_store.p
 | `question` | Text | Original user prompt |
 | `response` | Text | Final assistant response |
 | `created_at` | Text | UTC timestamp |
+| `feedback_score` | Integer | `1` for upvoted, `-1` for downvoted, `0` for unrated |
+| `feedback_updated_at` | Text | UTC timestamp of the latest feedback action |
 
 Purpose:
-- recent user memory for prompt context
+- recent and related user memory for prompt context
+- storage for curated helpful answers that can be surfaced on similar questions
 - sidebar history in the web UI
+
+Retention:
+- old conversation memory is pruned during writes based on `MEMORY_RETENTION_DAYS`
 
 ### 4.2 Table: `context_documents`
 
@@ -182,6 +189,10 @@ Purpose:
 - policy and schema retrieval
 - metric definitions
 - future document-grounded guidance
+
+Access behavior:
+- document retrieval is filtered by each user's `allowed_doc_tags`
+- document management APIs are also checked against allowed tags
 
 ### 4.3 Seeded context documents
 The repo seeds documents such as:

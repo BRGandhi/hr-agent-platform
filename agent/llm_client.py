@@ -9,9 +9,13 @@ Supports:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
+from config import LLM_TIMEOUT_SECONDS
+
+logger = logging.getLogger("hr_platform.llm")
 
 OPENAI_COMPAT_PROVIDER = "openai-compatible"
 
@@ -64,7 +68,10 @@ class AnthropicLLMClient(BaseLLMClient):
         import anthropic
 
         self._anthropic = anthropic
-        self.client = anthropic.Anthropic(api_key=self.config.api_key)
+        self.client = anthropic.Anthropic(
+            api_key=self.config.api_key,
+            timeout=float(LLM_TIMEOUT_SECONDS),
+        )
 
     def create_response(self, system_prompt: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
         anthropic_messages = self._to_anthropic_messages(messages)
@@ -84,6 +91,8 @@ class AnthropicLLMClient(BaseLLMClient):
             raise LLMClientError("Anthropic rate limit reached. Please try again shortly.") from exc
         except self._anthropic.APIConnectionError as exc:
             raise LLMClientError("Could not connect to Anthropic. Check your network connection.") from exc
+        except self._anthropic.APITimeoutError as exc:
+            raise LLMClientError("Anthropic API request timed out. Please try again.") from exc
         except self._anthropic.APIStatusError as exc:
             raise LLMClientError(f"Anthropic API error ({exc.status_code}).") from exc
 
@@ -154,7 +163,10 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         super().__init__(config)
         from openai import OpenAI
 
-        client_kwargs: dict[str, Any] = {"api_key": self.config.api_key or "not-needed"}
+        client_kwargs: dict[str, Any] = {
+            "api_key": self.config.api_key or "not-needed",
+            "timeout": float(LLM_TIMEOUT_SECONDS),
+        }
         if self.config.base_url:
             client_kwargs["base_url"] = self.config.base_url
         self.client = OpenAI(**client_kwargs)
@@ -172,7 +184,7 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
                 temperature=0.2,
             )
         except Exception as exc:
-            raise LLMClientError(f"OpenAI-compatible provider error: {exc}") from exc
+            raise LLMClientError(f"OpenAI-compatible provider error: {type(exc).__name__}") from exc
 
         message = response.choices[0].message
         tool_calls: list[ToolCall] = []

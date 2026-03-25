@@ -27,7 +27,6 @@ At a minimum, understand these files before modifying the platform:
 ### Top-level
 - [README.md](README.md): overview and repo map
 - [server.py](server.py): main backend entry point
-- [app.py](app.py): legacy Streamlit UI
 - [setup_db.py](setup_db.py): builds `hr_data.db`
 - [config.py](config.py): environment-driven runtime configuration
 
@@ -66,7 +65,6 @@ Python dependencies are declared in [requirements.txt](requirements.txt):
 - `pandas`
 - `plotly`
 - `python-dotenv`
-- `streamlit`
 
 ## 4. Clone And Install
 
@@ -136,6 +134,11 @@ DEV_SSO_ENABLED=true
 - `DEV_SSO_ENABLED=true` enables the demo sign-in flow.
 - `AUTH_REQUIRED=false` bypasses the auth shell and resolves the user as local admin.
 - `DEFAULT_OPENAI_COMPAT_BASE_URL` is what makes local Ollama or another OpenAI-compatible server work.
+- `SECURE_COOKIES=false` is the right local default for `http://127.0.0.1:8000`; set it to `true` only behind HTTPS.
+- `CORS_ALLOWED_ORIGINS` should list only your trusted frontend origins outside local development.
+- API keys can be entered either in `.env` or in the Connect LLM modal.
+- Generated aggregate tables can be turned into visuals either by asking the agent in a follow-up prompt or by using the table-level `Visual options` action in the UI.
+- Standard reports now prefer a `Download Excel` action instead of offering a visualization CTA.
 
 ## 6. Prepare The HR Dataset
 
@@ -175,14 +178,6 @@ python -m uvicorn server:app --host 127.0.0.1 --port 8000
 Open:
 - `http://127.0.0.1:8000`
 
-### Legacy path: Streamlit
-
-```bash
-python -m streamlit run app.py
-```
-
-This is still useful for experiments, but the FastAPI + JS app is the primary experience.
-
 ## 8. Validate A Fresh Local Install
 
 After starting the server, validate the following:
@@ -198,9 +193,17 @@ After starting the server, validate the following:
 ### 8.3 Access-scoped UI
 - top KPI cards reflect the signed-in scope
 - example prompts change based on access
+- topic chips under the welcome state expand into related sample questions when clicked
 - previous questions appear in the sidebar after asking a question
 
-### 8.4 Chat safety behavior
+### 8.4 Response and memory UX
+- assistant answers show `Yes` / `No` helpfulness controls
+- a table response can still be turned into a chart with a follow-up such as `make this a visualization`
+- asking a similar question later can surface a previously upvoted answer as a helpful example
+- standard reports should show a `Download Excel` action
+- `Visual options` should only appear on smaller aggregate tables, not on employee-level roster outputs
+
+### 8.5 Chat safety behavior
 Try these prompts:
 - `What is the attrition rate for my scope?`
 - `Generate an active headcount report for my scope`
@@ -325,15 +328,15 @@ This is the most important section for a regulated internal rollout.
 
 ### Replace immediately
 - demo SSO flow
-- permissive CORS
+- deployment-specific `CORS_ALLOWED_ORIGINS`
 - in-memory sessions
-- development-grade cookie settings
+- local `SECURE_COOKIES=false` with production HTTPS cookie settings
 - SQLite-based access-control authority if your bank already has a source of truth
 
 ### Strongly consider replacing
 - SQLite memory store
 - SQLite analytics store if connecting to real HR systems
-- direct provider credentials in end-user initiated requests
+- the single-node in-memory rate limiter if you deploy multiple app instances
 
 ### Add before production
 - centralized logging

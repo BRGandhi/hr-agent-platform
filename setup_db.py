@@ -38,7 +38,7 @@ def setup_database(csv_path: str, db_path: str) -> None:
     print(f"  Total rows: {count}")
     for row in attrition:
         print(f"  Attrition={row[0]}: {row[1]} employees")
-    print("\nSetup complete! You can now run: streamlit run app.py")
+    print("\nSetup complete! You can now run: python -m uvicorn server:app --host 127.0.0.1 --port 8000")
 
 
 if __name__ == "__main__":

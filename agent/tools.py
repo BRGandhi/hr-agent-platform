@@ -62,17 +62,18 @@ TOOLS = [
     {
         "name": "create_visualization",
         "description": (
-            "Generate a Plotly chart specification from HR data. "
-            "Use this when the user asks for a chart, graph, visualization, or plot. "
-            "Supported chart types: bar, horizontal_bar, pie, histogram, scatter, line, box. "
-            "Returns a chart spec that Streamlit will render automatically."
+            "Generate a polished Plotly chart specification from HR data. "
+            "Use this when the user asks for a specific chart, graph, visualization, or plot. "
+            "If the user refers to the latest generated table, data can be omitted and the runtime will use that table context. "
+            "Supported chart types: bar, horizontal_bar, stacked_bar, pie, donut, histogram, scatter, line, area, box. "
+            "Returns a chart spec that the frontend will render automatically."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "chart_type": {
                     "type": "string",
-                    "enum": ["bar", "horizontal_bar", "pie", "histogram", "scatter", "line", "box"],
+                    "enum": ["bar", "horizontal_bar", "stacked_bar", "pie", "donut", "histogram", "scatter", "line", "area", "box"],
                     "description": "Type of chart to create",
                 },
                 "data": {
@@ -96,7 +97,39 @@ TOOLS = [
                     "description": "Optional: column to use for color grouping",
                 },
             },
-            "required": ["chart_type", "data", "x_column", "y_column", "title"],
+            "required": ["chart_type", "title"],
+        },
+    },
+    {
+        "name": "suggest_visualizations",
+        "description": (
+            "Analyze a generated HR table and return a few strong chart options with ready-to-render Plotly specs. "
+            "Use this when the user asks to turn a table into a visual, asks for chart recommendations, "
+            "or wants to compare multiple visualization options before choosing one. "
+            "Prefer this tool before create_visualization when the user says things like "
+            "'visualize this table', 'turn that into a chart', or 'give me a few chart options'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "string",
+                    "description": "JSON string of the table rows to visualize. Optional when using the latest generated table.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Human-readable title for the source table",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Optional: the user's visualization request for additional context",
+                },
+                "max_options": {
+                    "type": "integer",
+                    "description": "How many chart options to return (2 to 4 recommended)",
+                },
+            },
+            "required": ["title"],
         },
     },
     {

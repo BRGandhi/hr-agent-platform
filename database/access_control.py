@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 
 from config import ACCESS_DB_PATH
 
+logger = logging.getLogger("hr_platform.access")
 
 HR_SCOPE_KEYWORDS = {
     "hr", "people", "employee", "employees", "headcount", "hc", "attrition", "turnover",
@@ -35,6 +37,10 @@ METRIC_COLUMNS = {
 }
 
 
+class AccessDeniedError(Exception):
+    """Raised when a user has no access profile provisioned."""
+
+
 @dataclass
 class AccessProfile:
     email: str
@@ -59,6 +65,11 @@ class AccessProfile:
         }
 
     def departments_clause(self) -> str | None:
+        """Return a SQL WHERE fragment for department filtering.
+
+        NOTE: This is only used for display / non-parameterized contexts (e.g. logging).
+        The actual DB queries use parameterized queries via connector.py.
+        """
         if not self.allowed_departments:
             return None
         values = ", ".join(
@@ -68,12 +79,33 @@ class AccessProfile:
         return f"Department IN ({values})"
 
     def requested_metrics_for_question(self, question: str) -> set[str]:
+        """Extract requested metric domains from question using keyword matching.
+
+        Uses word boundary awareness to reduce false positives
+        (e.g. 'turnaround' won't trigger 'turnover').
+        """
         lowered = question.lower()
-        requested = {
-            metric
-            for metric, keywords in METRIC_KEYWORDS.items()
-            if any(keyword in lowered for keyword in keywords)
-        }
+        requested: set[str] = set()
+
+        for metric, keywords in METRIC_KEYWORDS.items():
+            for keyword in keywords:
+                # Multi-word keywords: substring match (e.g. "employee count")
+                # Single-word keywords: check word boundaries
+                if " " in keyword:
+                    if keyword in lowered:
+                        requested.add(metric)
+                        break
+                else:
+                    # Simple word-boundary check: keyword surrounded by non-alpha chars
+                    idx = lowered.find(keyword)
+                    while idx != -1:
+                        before_ok = idx == 0 or not lowered[idx - 1].isalpha()
+                        after_ok = (idx + len(keyword) >= len(lowered)) or not lowered[idx + len(keyword)].isalpha()
+                        if before_ok and after_ok:
+                            requested.add(metric)
+                            break
+                        idx = lowered.find(keyword, idx + 1)
+
         if not requested and any(keyword in lowered for keyword in HR_SCOPE_KEYWORDS):
             requested.add("headcount")
         return requested
@@ -115,13 +147,13 @@ class AccessControlStore:
         self.db_path = db_path
         self._initialize()
 
-    def _connection(self):
+    def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _initialize(self):
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS user_access (
@@ -174,7 +206,7 @@ class AccessControlStore:
             },
         ]
 
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             for profile in default_profiles:
                 conn.execute(
                     """
@@ -194,20 +226,16 @@ class AccessControlStore:
             conn.commit()
 
     def get_profile(self, email: str) -> AccessProfile:
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM user_access WHERE email = ?",
                 (email,),
             ).fetchone()
 
         if row is None:
-            return AccessProfile(
-                email=email,
-                role="Restricted User",
-                scope_name="Assigned Scope",
-                allowed_departments=["Research & Development"],
-                allowed_metrics=["headcount", "attrition"],
-                allowed_doc_tags=["hr", "access"],
+            logger.warning("No access profile found for user: %s — denying access", email)
+            raise AccessDeniedError(
+                f"No access profile provisioned for {email}. Contact your administrator."
             )
 
         return AccessProfile(

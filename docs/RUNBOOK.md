@@ -36,14 +36,6 @@ sudo systemctl start hr-insights
 sudo systemctl status hr-insights
 ```
 
-### 2.3 Legacy Streamlit start
-
-```bash
-python -m streamlit run app.py
-```
-
-This path is not the recommended operational interface for the governed web experience.
-
 ## 3. Stop Procedures
 
 ### Foreground process
@@ -75,7 +67,16 @@ curl -I http://127.0.0.1:8000/
 Expected:
 - HTTP 200
 
-### 4.3 Auth config reachability
+### 4.3 Health endpoint
+
+```bash
+curl http://127.0.0.1:8000/healthz
+```
+
+Expected:
+- `{"ok": true, "database": "connected"}`
+
+### 4.4 Auth config reachability
 
 ```bash
 curl http://127.0.0.1:8000/api/auth/config
@@ -84,12 +85,14 @@ curl http://127.0.0.1:8000/api/auth/config
 Expected:
 - JSON payload describing auth requirements and supported providers
 
-### 4.4 Manual smoke test
+### 4.5 Manual smoke test
 1. Open the UI
 2. Sign in with a demo provider
 3. Confirm the KPI strip loads
 4. Ask a scoped HR question
-5. Ask an out-of-scope question and confirm refusal
+5. Generate a standard report and confirm the table shows `Download Excel`
+6. Generate a small aggregate table and confirm `Visual options` appears only there
+7. Ask an out-of-scope question and confirm refusal
 
 ## 5. Files That Must Exist
 
@@ -126,6 +129,7 @@ Useful log patterns:
 - `400 Empty message`: malformed chat request
 - `Anthropic API error` or `OpenAI-compatible provider error`: upstream model problem
 - `Tool execution error`: problem in tool code or query path
+- `Could not prepare the Excel export`: failure in report export regeneration
 
 ### 6.3 Recommended future logging posture
 For a bank-internal deployment, ship logs to a centralized platform and include:
@@ -310,8 +314,8 @@ This repo currently uses lightweight SQLite initialization logic rather than a m
 This section is especially relevant for internal bank use.
 
 ### Current repo defaults that must be reviewed
-- CORS is open
-- auth cookies are not yet production-hardened
+- `CORS_ALLOWED_ORIGINS` may still be set for localhost
+- auth cookies default to local-development settings unless `SECURE_COOKIES=true`
 - auth sessions are in-memory
 - dev SSO is not real enterprise SSO
 
@@ -354,6 +358,6 @@ For internal-bank readiness, the next runbook-worthy improvements should be:
 2. Redis or equivalent shared session store
 3. stronger secret handling
 4. centralized structured logging
-5. request timeouts and rate limiting
+5. shared rate limiting for multi-instance deployments
 6. automated smoke tests
 7. role and report audit trails

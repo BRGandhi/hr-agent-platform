@@ -5,16 +5,27 @@ Provider-agnostic Think -> Act -> Observe loop with scope, access, and context e
 from __future__ import annotations
 
 import json
+import logging
 from typing import Generator
 
 from agent.llm_client import LLMClientError, LLMConfig, create_llm_client
 from agent.prompts import build_system_prompt
 from agent.tool_executor import ToolExecutor
 from agent.tools import TOOLS
-from config import MAX_AGENT_ITERATIONS
+from config import MAX_AGENT_ITERATIONS, MAX_CONVERSATION_HISTORY
 from database.access_control import AccessProfile
 from database.connector import HRDatabase
 from database.context_store import ContextStore
+
+logger = logging.getLogger("hr_platform.agent")
+
+# Display constants
+MAX_TABLE_ROWS = 50
+MAX_RESULT_CHARS = 2000
+MAX_RELATED_MEMORY = 6
+MAX_HELPFUL_MEMORY = 3
+VISUAL_FOLLOW_UP_KEYWORDS = ("visual", "visualize", "visualization", "chart", "graph", "plot", "dashboard")
+PRIOR_RESULT_REFERENCES = ("this", "that", "it", "above", "previous", "latest", "table", "result")
 
 
 class HRAgent:
@@ -24,9 +35,11 @@ class HRAgent:
         self.executor = ToolExecutor(db)
         self.context_store = context_store
         self.conversation_history: list[dict] = []
+        self.last_table_context: dict | None = None
 
     def reset(self):
         self.conversation_history = []
+        self.last_table_context = None
 
     def update_llm_config(self, llm_config: LLMConfig):
         normalized = llm_config.normalized()
@@ -34,26 +47,118 @@ class HRAgent:
             self.llm_config = normalized
             self.client = create_llm_client(normalized)
 
-    def chat(self, user_message: str, access_profile: AccessProfile) -> Generator[dict, None, None]:
-        allowed, reason = access_profile.can_access_question(user_message)
+    def _trim_history(self):
+        """Keep conversation history within bounds to control token usage."""
+        if len(self.conversation_history) > MAX_CONVERSATION_HISTORY:
+            self.conversation_history = self.conversation_history[-MAX_CONVERSATION_HISTORY:]
+
+    def _dedupe_memories(self, memories: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen_ids: set[int] = set()
+        for item in memories:
+            memory_id = int(item.get("memory_id") or 0)
+            if memory_id and memory_id in seen_ids:
+                continue
+            if memory_id:
+                seen_ids.add(memory_id)
+            deduped.append(item)
+        return deduped
+
+    def _is_visualization_follow_up(self, user_message: str, table_context: dict | None) -> bool:
+        if not table_context or not table_context.get("rows"):
+            return False
+
+        lowered = user_message.lower()
+        asks_for_visual = any(keyword in lowered for keyword in VISUAL_FOLLOW_UP_KEYWORDS)
+        references_prior_result = (
+            any(keyword in lowered for keyword in PRIOR_RESULT_REFERENCES)
+            or ("turn" in lowered and "into" in lowered)
+            or ("convert" in lowered)
+            or ("show me options" in lowered)
+        )
+        return asks_for_visual and references_prior_result
+
+    def _build_access_check_message(self, user_message: str, table_context: dict | None) -> str:
+        if not self._is_visualization_follow_up(user_message, table_context):
+            return user_message
+
+        rows = table_context.get("rows") or []
+        columns = list(rows[0].keys()) if rows else []
+        title = str(table_context.get("title", "Latest Table") or "Latest Table")
+        context_summary = f" HR table context: {title}. Columns: {', '.join(columns[:12])}."
+        return f"{user_message}{context_summary}"
+
+    def chat(
+        self,
+        user_message: str,
+        access_profile: AccessProfile,
+        table_context: dict | None = None,
+    ) -> Generator[dict, None, None]:
+        if table_context and table_context.get("rows"):
+            self.last_table_context = {
+                "title": table_context.get("title", "Latest Table"),
+                "rows": table_context["rows"],
+            }
+
+        active_table_context = self.last_table_context
+        access_check_message = self._build_access_check_message(user_message, active_table_context)
+        allowed, reason = access_profile.can_access_question(access_check_message)
         if not allowed:
             yield {"type": "final_text", "text": reason}
-            self.context_store.remember(access_profile.email, user_message, reason)
             return
 
         recent_memory = self.context_store.recent_memory(access_profile.email)
+        recent_memory_ids = {
+            int(item["memory_id"])
+            for item in recent_memory
+            if item.get("memory_id")
+        }
+        related_memory = self.context_store.search_memories(
+            access_profile.email,
+            access_check_message,
+            limit=MAX_RELATED_MEMORY,
+            exclude_memory_ids=recent_memory_ids,
+        )
+        helpful_memory = self.context_store.search_memories(
+            access_profile.email,
+            access_check_message,
+            limit=MAX_HELPFUL_MEMORY,
+            min_feedback=1,
+            exclude_memory_ids=recent_memory_ids,
+        )
+        helpful_memory = self._dedupe_memories(helpful_memory)
+        related_memory = self._dedupe_memories(
+            related_memory + [item for item in helpful_memory if item.get("memory_id") not in recent_memory_ids]
+        )[:MAX_RELATED_MEMORY]
         context_documents = self.context_store.search_documents(
             user_message,
             access_profile.allowed_doc_tags,
         )
+        if helpful_memory:
+            yield {
+                "type": "helpful_memories",
+                "items": [
+                    {
+                        "memory_id": item.get("memory_id"),
+                        "question": item.get("question", ""),
+                        "response": item.get("response", "")[:260],
+                    }
+                    for item in helpful_memory
+                ],
+            }
         system_prompt = build_system_prompt(
             access_profile=access_profile.summary(),
             recent_memory=recent_memory,
+            related_memory=related_memory,
+            helpful_memory=helpful_memory,
             context_documents=context_documents,
+            latest_table_context=active_table_context,
         )
 
         self.conversation_history.append({"role": "user", "content": user_message})
+        self._trim_history()
         iteration = 0
+        last_text = ""
 
         while iteration < MAX_AGENT_ITERATIONS:
             iteration += 1
@@ -67,6 +172,9 @@ class HRAgent:
             except LLMClientError as exc:
                 yield {"type": "error", "message": str(exc)}
                 return
+
+            if response.text:
+                last_text = response.text.strip()
 
             self.conversation_history.append(
                 {
@@ -82,6 +190,13 @@ class HRAgent:
             if response.tool_calls:
                 for tool_call in response.tool_calls:
                     tool_input = tool_call.input
+
+                    logger.info(
+                        "Tool call: %s user=%s",
+                        tool_call.name,
+                        access_profile.email,
+                    )
+
                     yield {
                         "type": "tool_call",
                         "name": tool_call.name,
@@ -90,7 +205,12 @@ class HRAgent:
                         "inputs": tool_input,
                     }
 
-                    result = self.executor.execute(tool_call.name, tool_input, access_profile=access_profile)
+                    result = self.executor.execute(
+                        tool_call.name,
+                        tool_input,
+                        access_profile=access_profile,
+                        table_context=active_table_context,
+                    )
                     parsed_result = self._safe_parse_json(result)
 
                     if isinstance(parsed_result, dict) and "chart_json" in parsed_result:
@@ -100,20 +220,42 @@ class HRAgent:
                             "title": parsed_result.get("title", "Chart"),
                         }
 
+                    if isinstance(parsed_result, dict) and isinstance(parsed_result.get("options"), list):
+                        yield {
+                            "type": "visual_options",
+                            "title": parsed_result.get("title", "Visualization options"),
+                            "recommended_option_id": parsed_result.get("recommended_option_id"),
+                            "options": parsed_result["options"],
+                        }
+
                     table_data = None
+                    full_table_data = None
                     table_title = tool_call.name
+                    report_type = None
+                    table_total_rows = None
                     if isinstance(parsed_result, list):
-                        table_data = parsed_result[:50]
+                        full_table_data = parsed_result
+                        table_data = parsed_result[:MAX_TABLE_ROWS]
+                        table_total_rows = len(parsed_result)
                     elif isinstance(parsed_result, dict) and "results" in parsed_result and isinstance(parsed_result["results"], list):
-                        table_data = parsed_result["results"][:50]
+                        full_table_data = parsed_result["results"]
+                        table_data = parsed_result["results"][:MAX_TABLE_ROWS]
                         table_title = parsed_result.get("report_name") or parsed_result.get("focus_area") or tool_call.name
+                        report_type = parsed_result.get("report_type")
+                        table_total_rows = int(parsed_result.get("row_count") or len(parsed_result["results"]))
+
+                    if full_table_data:
+                        self.last_table_context = {"title": table_title, "rows": full_table_data}
+                        active_table_context = self.last_table_context
 
                     yield {
                         "type": "tool_result",
                         "name": tool_call.name,
-                        "result": result[:2000],
+                        "result": result[:MAX_RESULT_CHARS],
                         "table_data": table_data,
                         "title": table_title,
+                        "report_type": report_type,
+                        "table_total_rows": table_total_rows,
                     }
 
                     self.conversation_history.append(
@@ -128,16 +270,22 @@ class HRAgent:
                 continue
 
             final_text = response.text.strip() or "(The model returned no final text.)"
-            self.context_store.remember(access_profile.email, user_message, final_text)
-            yield {"type": "final_text", "text": final_text}
+            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
             return
 
-        fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
-        self.context_store.remember(access_profile.email, user_message, fallback)
-        yield {"type": "error", "message": fallback}
+        # Max iterations reached — return best-effort answer if available
+        if last_text:
+            memory_id = self.context_store.remember(access_profile.email, user_message, last_text)
+            yield {"type": "final_text", "text": last_text, "memory_id": memory_id, "feedback_score": 0}
+        else:
+            fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
+            self.context_store.remember(access_profile.email, user_message, fallback)
+            yield {"type": "error", "message": fallback}
 
     def _safe_parse_json(self, value: str):
         try:
             return json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            return None
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.debug("JSON parse failed for tool result: %s", exc)
+            return {"error": f"Failed to parse tool result", "raw": value[:500]}

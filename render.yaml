@@ -3,9 +3,19 @@ services:
     name: hr-intelligence-platform
     runtime: docker
     plan: free
-    healthCheckPath: /_stcore/health
+    healthCheckPath: /healthz
     envVars:
       - key: ANTHROPIC_API_KEY
-        sync: false        # set this manually in the Render dashboard
-      - key: APP_PASSWORD
-        sync: false        # set this manually in the Render dashboard
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AUTH_REQUIRED
+        value: "true"
+      - key: SECURE_COOKIES
+        value: "true"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://hr-intelligence-platform.onrender.com"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "20"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"

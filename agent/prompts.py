@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+import json
+
 from database.schema import HR_SCHEMA
 
 
-def build_system_prompt(access_profile: dict, recent_memory: list[dict], context_documents: list[dict]) -> str:
-    memory_block = "\n".join(
+def build_system_prompt(
+    access_profile: dict,
+    recent_memory: list[dict],
+    related_memory: list[dict],
+    helpful_memory: list[dict],
+    context_documents: list[dict],
+    latest_table_context: dict | None = None,
+) -> str:
+    recent_memory_block = "\n".join(
         f"- Q: {item['question']}\n  A: {item['response'][:220]}"
         for item in recent_memory
     ) or "- No prior user memory yet."
+
+    related_memory_block = "\n".join(
+        f"- Q: {item['question']}\n  A: {item['response'][:220]}"
+        for item in related_memory
+    ) or "- No older related chats matched this request."
+
+    helpful_memory_block = "\n".join(
+        f"- Helpful Q: {item['question']}\n  Helpful A: {item['response'][:220]}"
+        for item in helpful_memory
+    ) or "- No previously upvoted similar answers found."
 
     docs_block = "\n".join(
         f"- {doc['title']} [{', '.join(doc['tags'])}]: {doc['content'][:320]}"
@@ -16,6 +35,16 @@ def build_system_prompt(access_profile: dict, recent_memory: list[dict], context
 
     allowed_departments = access_profile.get("allowed_departments") or ["All departments"]
     allowed_metrics = access_profile.get("allowed_metrics") or ["headcount", "attrition"]
+    latest_table_rows = (latest_table_context or {}).get("rows") or []
+    latest_table_title = (latest_table_context or {}).get("title") or "Latest Table"
+    latest_table_columns = list(latest_table_rows[0].keys()) if latest_table_rows else []
+    latest_table_sample = json.dumps(latest_table_rows[:5], default=str)[:1200] if latest_table_rows else ""
+    latest_table_block = (
+        f"- Title: {latest_table_title}\n"
+        f"- Columns: {', '.join(latest_table_columns) if latest_table_columns else 'None'}\n"
+        f"- Row count: {len(latest_table_rows)}\n"
+        f"- Sample rows: {latest_table_sample}"
+    ) if latest_table_rows else "- No generated table is currently available for follow-up visualization."
 
     return f"""You are an HR Intelligence Assistant.
 
@@ -45,23 +74,36 @@ respond that the request is out of scope for this platform and stop.
 
 ## Context Memory
 Recent user interactions:
-{memory_block}
+{recent_memory_block}
+
+Related past interactions from the broader chat history:
+{related_memory_block}
+
+Previously upvoted helpful answers for similar questions:
+{helpful_memory_block}
 
 Relevant context documents:
 {docs_block}
 
+## Latest Table Context
+{latest_table_block}
+
 ## How to Respond
 1. Use `query_hr_database` for scoped HR data questions.
 2. Use `calculate_metrics` for approved HR calculations only.
-3. Use `create_visualization` only for allowed data.
-4. Use `get_attrition_insights` only when attrition access is allowed.
-5. Use `generate_standard_report` when the user asks for a standard report, employee-level report,
+3. If the user asks to turn a generated table into a visual, compare visualization options, or says things like
+   "chart that", "visualize this table", or "show me a few graph options", use `suggest_visualizations` first.
+   The latest table context above is available to visualization tools even if `data` is omitted.
+4. Use `create_visualization` when the user clearly asks for one specific chart type or already chose a visual option.
+5. Use `get_attrition_insights` only when attrition access is allowed.
+6. Use `generate_standard_report` when the user asks for a standard report, employee-level report,
    name-by-name report, active headcount roster, or attrition roster.
-6. If the request is outside HR insights or outside role access, return a concise refusal.
+7. If the request is outside HR insights or outside role access, return a concise refusal.
 
 ## Style
 - Lead with the key HR finding.
 - Be concise and professional.
 - Reference the filtered dataset scope used for the answer.
+- Reuse the structure of previously helpful answers when it fits the user's current question, but do not copy stale details that no longer match the scoped data.
 - Do not invent external facts or policy details that are not present in the retrieved context.
 """

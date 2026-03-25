@@ -4,7 +4,6 @@ The HR Insights Platform is a governed HR analytics assistant designed to answer
 
 This repo currently combines:
 - a FastAPI backend and vanilla JS web frontend
-- a legacy Streamlit interface for experimentation
 - a provider-agnostic LLM layer that supports Anthropic and OpenAI-compatible endpoints
 - role-based access controls tied to the signed-in user
 - a context and memory layer for prior questions, HR policies, and schema notes
@@ -34,6 +33,8 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 
 ### 3. Context and memory layer
 - User-specific prior questions are stored in `context_store.db`.
+- The orchestrator now searches broader past interactions for related answers, not just the most recent turns.
+- Users can upvote or downvote responses, and positively rated answers can be surfaced later for similar questions.
 - HR policy and schema reference documents are retrieved per question and injected into the system prompt.
 - The UI surfaces previously asked questions in the sidebar.
 
@@ -48,15 +49,37 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - Local models can be used through Ollama or any OpenAI-compatible gateway.
 - Hosted providers such as Kimi-compatible endpoints can be connected without changing the agent loop.
 
-### 6. Bank-friendly operating model
+### 6. Stronger visualization workflow
+- The agent can render polished Plotly visuals for approved HR data.
+- When a user asks to convert a generated table into a visual, the agent can now return multiple chart options and recommend the strongest view.
+- The web UI preserves the latest table context so follow-up prompts such as "turn that into a chart" work more reliably.
+
+### 7. Bank-friendly operating model
 - The architecture separates model calls, access policy, SQL execution, and UI rendering into distinct layers.
 - The repo is suitable as a reference implementation for internal deployment behind enterprise identity and network controls.
 - The docs call out what is already in place and what still needs hardening for production in a regulated environment.
 
+### 8. Guided question discovery
+- Topic chips on the home screen are clickable and now expand into sample questions for that metric or workflow.
+- Similar-question matches can show previously helpful answers before the agent generates a fresh response.
+- Assistant responses include `Yes` / `No` helpfulness controls so teams can curate strong examples over time.
+
+## New Agent Features
+
+The newest generation of the agent is optimized around governed follow-up work instead of one-off answers.
+
+- Broader memory retrieval: the orchestrator now searches prior user interactions for relevant answers, not just the last few turns.
+- Helpful-answer reuse: positively rated responses can be surfaced when a later question looks similar.
+- Guided discovery UX: empty-state topic chips expand into sample scoped prompts so users can explore approved HR workflows faster.
+- Table-aware visualization flow: when a user asks to turn a generated table into a chart, the latest table context is preserved and reused automatically.
+- Visualization gating: `Visual options` is now reserved for smaller aggregate tables that are actually chartable.
+- Report export flow: standard employee-level reports now favor `Download Excel` instead of a chart CTA.
+- Inline feedback loop: each assistant answer supports `Yes` / `No` helpfulness feedback for future curation.
+
 ## Architecture At A Glance
 
 ```text
-Browser UI / Streamlit
+Browser UI
         |
         v
 FastAPI server.py
@@ -79,6 +102,7 @@ HRAgent orchestrator
               - query_hr_database
               - calculate_metrics
               - create_visualization
+              - suggest_visualizations
               - get_attrition_insights
               - generate_standard_report
         |
@@ -156,6 +180,8 @@ AUTH_REQUIRED=true
 DEV_SSO_ENABLED=true
 ```
 
+You can provide API keys either in `.env` or directly in the Connect LLM modal.
+
 ### 5. Prepare the dataset
 
 Download the IBM HR dataset CSV and place it one folder above the repo, or update `CSV_PATH` in [config.py](config.py).
@@ -184,7 +210,9 @@ With the default dev SSO flow enabled, sign in using one of the seeded demo prov
 You should then see:
 - a scoped KPI strip
 - role-aware example questions
+- clickable topic chips that expand into sample prompts
 - previously asked questions in the sidebar
+- `Yes` / `No` helpfulness controls after assistant responses
 - the ability to connect an LLM provider from the top banner
 
 For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).
@@ -193,7 +221,6 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 
 ### Runtime entry points
 - [server.py](server.py): FastAPI app and SSE backend
-- [app.py](app.py): legacy Streamlit frontend
 - [setup_db.py](setup_db.py): CSV-to-SQLite loader
 
 ### Agent layer
@@ -222,6 +249,15 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 - [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): logical data model and store definitions
 - [docs/CODE_LOG.md](docs/CODE_LOG.md): implementation history and major design decisions
 
+## Change Logging
+
+Repository change history is tracked in [docs/CODE_LOG.md](docs/CODE_LOG.md).
+
+Recommended practice for future updates:
+- add one top-level version entry per feature cluster or release-sized change
+- capture both the user-visible behavior and the architectural reason behind the change
+- update README and architecture docs whenever a changelog entry introduces a new runtime capability
+
 ## Configuration Reference
 
 | Variable | Default | Description |
@@ -235,7 +271,14 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 | `SESSION_TTL_MINUTES` | `120` | Idle session cleanup window |
 | `AUTH_REQUIRED` | `true` | Require sign-in before use |
 | `DEV_SSO_ENABLED` | `true` | Enable demo SSO flow |
+| `SECURE_COOKIES` | `false` | Set auth cookies as HTTPS-only; enable in production |
 | `SSO_PROVIDERS` | `Microsoft,Google,Okta` | Providers shown on the login shell |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed browser origins |
+| `RATE_LIMIT_MAX_REQUESTS` | `20` | Chat requests allowed per IP in the rate-limit window |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of the rate-limit window |
+| `LLM_TIMEOUT_SECONDS` | `60` | Upstream LLM request timeout |
+| `MAX_CONVERSATION_HISTORY` | `40` | Sliding window size for agent conversation history |
+| `MEMORY_RETENTION_DAYS` | `90` | How long conversation memory is retained |
 | `PORT` | `8000` | Backend port when using `server.py` or `uvicorn` |
 
 Runtime-created stores:
@@ -249,7 +292,7 @@ This repository is useful as a bank-internal prototype or reference implementati
 
 ### Identity and session hardening
 - Replace the dev SSO simulation with real OIDC or SAML
-- Set secure cookie flags for HTTPS
+- set `SECURE_COOKIES=true` behind HTTPS
 - move auth sessions out of in-memory Python dictionaries
 
 ### Data and storage hardening
@@ -258,13 +301,13 @@ This repository is useful as a bank-internal prototype or reference implementati
 - define retention and purge policies for stored conversation memory
 
 ### Network and API hardening
-- tighten `allow_origins=["*"]` CORS in [server.py](server.py)
+- set `CORS_ALLOWED_ORIGINS` to your real internal domains
 - use TLS termination and internal reverse proxies
 - route provider credentials through approved secret-management tooling
 
 ### Platform operations
 - centralize logs
-- add request timeouts and rate limits
 - add automated tests for auth, tooling, access controls, and SSE flows
+- consider moving the in-memory rate limiter to shared infrastructure for multi-instance deployments
 
 These gaps are documented in more detail in [docs/RUNBOOK.md](docs/RUNBOOK.md) and [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).

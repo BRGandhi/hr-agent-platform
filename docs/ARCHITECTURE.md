@@ -17,7 +17,7 @@ The platform is designed to answer HR analytics questions in a controlled way. T
 User
   |
   v
-Web Browser / Streamlit
+Web Browser
   |
   v
 FastAPI server
@@ -40,6 +40,7 @@ HRAgent orchestrator
   |     - query_hr_database
   |     - calculate_metrics
   |     - create_visualization
+  |     - suggest_visualizations
   |     - get_attrition_insights
   |     - generate_standard_report
   |
@@ -71,6 +72,8 @@ Primary endpoints:
 - `POST /api/auth/logout`: logout
 - `GET /api/me/access`: resolved user access profile
 - `GET /api/me/history`: recent questions for sidebar history
+- `POST /api/feedback`: store `Yes` / `No` helpfulness feedback for a saved response
+- `POST /api/reports/export/excel`: regenerate a scoped standard report and download it as an Excel-compatible workbook
 - `GET /api/context/documents`: list retrieved context docs
 - `POST /api/context/documents`: add context docs
 - `GET /api/stats`: scoped KPI payload
@@ -85,11 +88,9 @@ Responsibilities:
 - top-banner LLM connection
 - scoped KPI display
 - sidebar history and example prompts
+- clickable topic chips that expand into suggested follow-up questions
 - SSE event consumption
-- tool-call, chart, table, and markdown rendering
-
-### 3.3 Legacy Streamlit frontend
-[app.py](app.py) remains in the repo as a secondary interface. It is still useful for fast experiments, but it does not reflect the same governed auth and access model as the FastAPI + JS frontend.
+- tool-call, chart, visual-option, table, markdown, similar-answer, report-export, and feedback rendering
 
 ## 4. Request Lifecycle
 
@@ -104,12 +105,14 @@ Responsibilities:
 
 ### 4.2 Chat request lifecycle
 1. The user enters a question.
-2. The browser posts to `POST /api/chat` with message, provider, model, base URL, API key, and session id.
+2. The browser posts to `POST /api/chat` with message, provider, model, base URL, API key, session id, and optional latest-table context for follow-up visualization requests.
 3. [server.py](server.py) resolves the authenticated user and access profile.
 4. The server builds an `LLMConfig` object and gets or creates an `HRAgent`.
 5. [agent/orchestrator.py](agent/orchestrator.py) performs:
    - scope validation
-   - recent memory lookup
+   - in-session conversation history lookup
+   - recent and related memory lookup across stored user interactions
+   - helpful-answer retrieval from previously upvoted responses
    - context document retrieval
    - system prompt construction
 6. The selected LLM either:
@@ -119,6 +122,14 @@ Responsibilities:
 8. Tool results are appended back into the conversation history.
 9. The loop continues until the model returns a final response or the iteration limit is hit.
 10. Final answer, tool artifacts, and memory updates are streamed back to the UI.
+
+### 4.3 Table action policy
+The frontend now treats generated tables differently based on structure:
+- standard reports use a `Download Excel` action
+- small aggregate tables can expose `Visual options`
+- larger employee-level or identifier-heavy tables render without a chart CTA
+
+This avoids encouraging low-value charts for roster-style outputs while keeping guided visualization available for aggregated insights.
 
 ## 5. Provider-Agnostic LLM Layer
 
@@ -147,7 +158,12 @@ Responsibilities:
 - runs the tool-call loop
 - stores final responses back into memory
 
-The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](config.py) to limit runaway tool loops.
+Recent additions:
+- preserves the latest generated table for visualization follow-ups
+- emits helpful-memory events when prior upvoted answers match the current question
+- emits report metadata so the frontend can choose between chart exploration and export actions
+
+The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](../config.py) to limit runaway tool loops.
 
 ## 7. Access Control Model
 
@@ -181,6 +197,8 @@ This means even if the LLM proposes a broader query, the execution layer still n
 ### 8.1 Conversation memory
 - stores prior user question/response pairs
 - retrieves recent memory for the current user
+- searches broader past interactions for related question/answer pairs
+- stores per-response feedback so helpful answers can be reused as examples
 - powers the sidebar history list
 
 ### 8.2 Context document retrieval
@@ -215,6 +233,7 @@ Current tools:
 - `query_hr_database`
 - `calculate_metrics`
 - `create_visualization`
+- `suggest_visualizations`
 - `get_attrition_insights`
 - `generate_standard_report`
 
@@ -267,12 +286,12 @@ The most important boundaries in the system are:
 ## 14. Current Gaps For A Bank Deployment
 
 The following items should be treated as implementation gaps rather than documentation gaps:
-- `allow_origins=["*"]` is too open for production
-- auth cookies are not yet hardened for HTTPS-only enterprise use
+- `CORS_ALLOWED_ORIGINS` must be locked to trusted internal domains per deployment
+- `SECURE_COOKIES` should be enabled behind HTTPS in production
 - dev SSO is a stub and not real OIDC or SAML integration
 - sessions are in-memory rather than centralized
 - SQLite is convenient but not the likely final persistence choice for enterprise usage
-- automated tests are limited
+- automated tests are still limited
 
 ## 15. Recommended Next Architecture Steps
 

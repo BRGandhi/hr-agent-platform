@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
-from config import CONTEXT_DB_PATH
+from config import CONTEXT_DB_PATH, MEMORY_RETENTION_DAYS
 from database.schema import HR_SCHEMA
+
+logger = logging.getLogger("hr_platform.context")
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _tokenize(text: str) -> list[str]:
+    return [token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) > 2]
 
 
 class ContextStore:
@@ -17,13 +25,13 @@ class ContextStore:
         self.db_path = db_path
         self._initialize()
 
-    def _connection(self):
+    def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _initialize(self):
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_memory (
@@ -35,6 +43,8 @@ class ContextStore:
                 )
                 """
             )
+            self._ensure_column(conn, "conversation_memory", "feedback_score", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "conversation_memory", "feedback_updated_at", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS context_documents (
@@ -49,6 +59,15 @@ class ContextStore:
             conn.commit()
 
         self._seed_documents()
+
+    def _ensure_column(self, conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
+        columns = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name in columns:
+            return
+        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
     def _seed_documents(self):
         seed_docs = [
@@ -84,7 +103,7 @@ class ContextStore:
             },
         ]
 
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             existing_titles = {
                 row["title"]
                 for row in conn.execute("SELECT title FROM context_documents").fetchall()
@@ -102,20 +121,24 @@ class ContextStore:
             conn.commit()
 
     def add_document(self, title: str, content: str, tags: list[str]) -> dict:
-        with self._connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO context_documents (title, content, tags, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (title, content, json.dumps(tags), _utc_now()),
-            )
-            conn.commit()
-            doc_id = cursor.lastrowid
-        return {"id": doc_id, "title": title, "tags": tags}
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO context_documents (title, content, tags, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (title, content, json.dumps(tags), _utc_now()),
+                )
+                conn.commit()
+                doc_id = cursor.lastrowid
+            return {"id": doc_id, "title": title, "tags": tags}
+        except sqlite3.Error as exc:
+            logger.error("Failed to add context document: %s", exc)
+            raise
 
     def list_documents(self) -> list[dict]:
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             rows = conn.execute(
                 "SELECT id, title, tags, created_at FROM context_documents ORDER BY created_at DESC"
             ).fetchall()
@@ -129,22 +152,35 @@ class ContextStore:
             for row in rows
         ]
 
-    def remember(self, user_email: str, question: str, response: str):
-        with self._connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO conversation_memory (user_email, question, response, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user_email, question, response, _utc_now()),
-            )
-            conn.commit()
+    def remember(self, user_email: str, question: str, response: str) -> int | None:
+        try:
+            with self._get_connection() as conn:
+                # Enforce retention policy: delete old memories
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(days=MEMORY_RETENTION_DAYS)
+                ).isoformat()
+                conn.execute(
+                    "DELETE FROM conversation_memory WHERE created_at < ?",
+                    (cutoff,),
+                )
+                cursor = conn.execute(
+                    """
+                    INSERT INTO conversation_memory (user_email, question, response, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (user_email, question, response, _utc_now()),
+                )
+                conn.commit()
+                return int(cursor.lastrowid)
+        except sqlite3.Error as exc:
+            logger.error("Failed to store conversation memory: %s", exc)
+            return None
 
     def recent_memory(self, user_email: str, limit: int = 5) -> list[dict]:
-        with self._connection() as conn:
+        with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT question, response, created_at
+                SELECT id, question, response, created_at, feedback_score
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -152,13 +188,22 @@ class ContextStore:
                 """,
                 (user_email, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {
+                "memory_id": row["id"],
+                "question": row["question"],
+                "response": row["response"],
+                "created_at": row["created_at"],
+                "feedback_score": row["feedback_score"],
+            }
+            for row in rows
+        ]
 
-    def recent_questions(self, user_email: str, limit: int = 8) -> list[dict]:
-        with self._connection() as conn:
+    def recent_questions(self, user_email: str, limit: int = 20) -> list[dict]:
+        with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT question, created_at
+                SELECT id, question, created_at, feedback_score
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -166,11 +211,134 @@ class ContextStore:
                 """,
                 (user_email, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            {
+                "memory_id": row["id"],
+                "question": row["question"],
+                "created_at": row["created_at"],
+                "feedback_score": row["feedback_score"],
+            }
+            for row in rows
+        ]
+
+    def search_memories(
+        self,
+        user_email: str,
+        query: str,
+        limit: int = 5,
+        min_feedback: int | None = None,
+        exclude_memory_ids: set[int] | None = None,
+    ) -> list[dict]:
+        tokens = _tokenize(query)
+        exclude_memory_ids = exclude_memory_ids or set()
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, question, response, created_at, feedback_score
+                FROM conversation_memory
+                WHERE user_email = ?
+                ORDER BY id DESC
+                """,
+                (user_email,),
+            ).fetchall()
+
+        scored: list[tuple[float, str, dict]] = []
+        normalized_query = " ".join(tokens)
+
+        for row in rows:
+            memory_id = int(row["id"])
+            if memory_id in exclude_memory_ids:
+                continue
+
+            feedback_score = int(row["feedback_score"] or 0)
+            if min_feedback is not None and feedback_score < min_feedback:
+                continue
+            if min_feedback is None and feedback_score < 0:
+                continue
+
+            question_text = row["question"] or ""
+            response_text = row["response"] or ""
+            question_lower = question_text.lower()
+            response_lower = response_text.lower()
+
+            score = 0.0
+            if not tokens:
+                score = 1.0
+            else:
+                score += 4 * sum(token in question_lower for token in tokens)
+                score += 2 * sum(token in response_lower for token in tokens)
+                if normalized_query and normalized_query in question_lower:
+                    score += 4
+                if score <= 0:
+                    continue
+
+            if feedback_score > 0:
+                score += 3 * feedback_score
+
+            scored.append(
+                (
+                    score,
+                    row["created_at"],
+                    {
+                        "memory_id": memory_id,
+                        "question": question_text,
+                        "response": response_text,
+                        "created_at": row["created_at"],
+                        "feedback_score": feedback_score,
+                    },
+                )
+            )
+
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [item[2] for item in scored[:limit]]
+
+    def record_feedback(self, user_email: str, memory_id: int, vote: str) -> dict | None:
+        normalized_vote = str(vote or "").strip().lower()
+        feedback_score = 1 if normalized_vote in {"up", "yes"} else -1 if normalized_vote in {"down", "no"} else 0
+        if feedback_score == 0:
+            raise ValueError("Feedback vote must be 'yes'/'no' or 'up'/'down'.")
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE conversation_memory
+                    SET feedback_score = ?, feedback_updated_at = ?
+                    WHERE id = ? AND user_email = ?
+                    """,
+                    (feedback_score, _utc_now(), memory_id, user_email),
+                )
+                if cursor.rowcount == 0:
+                    return None
+
+                row = conn.execute(
+                    """
+                    SELECT id, question, response, created_at, feedback_score
+                    FROM conversation_memory
+                    WHERE id = ? AND user_email = ?
+                    """,
+                    (memory_id, user_email),
+                ).fetchone()
+                conn.commit()
+        except sqlite3.Error as exc:
+            logger.error("Failed to record conversation feedback: %s", exc)
+            raise
+
+        if row is None:
+            return None
+
+        return {
+            "memory_id": row["id"],
+            "question": row["question"],
+            "response": row["response"],
+            "created_at": row["created_at"],
+            "feedback_score": row["feedback_score"],
+        }
 
     def search_documents(self, query: str, allowed_tags: list[str], limit: int = 3) -> list[dict]:
-        tokens = [token.lower() for token in query.split() if len(token) > 2]
-        with self._connection() as conn:
+        tokens = _tokenize(query)
+        with self._get_connection() as conn:
             rows = conn.execute(
                 "SELECT title, content, tags, created_at FROM context_documents"
             ).fetchall()

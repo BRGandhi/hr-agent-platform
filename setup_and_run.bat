@@ -1,34 +1,29 @@
 @echo off
 setlocal enabledelayedexpansion
-title HR Intelligence Platform Setup
+title HR Insights Platform Setup
 
 echo ============================================================
-echo  Agentic HR Intelligence Platform - Setup ^& Launch
+echo  HR Insights Platform - Setup and Launch
 echo ============================================================
 echo.
 
-:: ── Locate Python (check common locations + ARM64 path) ───────
 set PYTHON=
 if exist "%LOCALAPPDATA%\Programs\Python\Python312-arm64\python.exe" (
     set PYTHON=%LOCALAPPDATA%\Programs\Python\Python312-arm64\python.exe
 ) else (
     where python >nul 2>&1
-    if %ERRORLEVEL% EQU 0 (
-        set PYTHON=python
-    )
+    if %ERRORLEVEL% EQU 0 set PYTHON=python
 )
 
 if not defined PYTHON (
     echo [INFO] Python not found. Installing via winget...
     winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
     if %ERRORLEVEL% NEQ 0 (
-        echo [ERROR] winget install failed. Please install Python 3.12 manually:
-        echo         https://www.python.org/downloads/
+        echo [ERROR] winget install failed. Install Python manually and rerun this script.
         pause
         exit /b 1
     )
-    echo [OK] Python installed. Please CLOSE this window and run setup_and_run.bat again.
-    echo      (PATH needs to refresh after Python install)
+    echo [OK] Python installed. Close this window and rerun setup_and_run.bat.
     pause
     exit /b 0
 )
@@ -37,54 +32,49 @@ for /f "tokens=*" %%v in ('"%PYTHON%" --version 2^>^&1') do set PYVER=%%v
 echo [OK] Found %PYVER% at %PYTHON%
 echo.
 
-:: ── Move to script directory ──────────────────────────────────
 cd /d "%~dp0"
 
-:: ── Install dependencies ──────────────────────────────────────
-echo [STEP 1/3] Installing Python packages...
+echo [STEP 1/4] Installing Python packages...
 "%PYTHON%" -m pip install --upgrade pip -q
-:: Use --prefer-binary to avoid C compilation issues on ARM64 Windows
-"%PYTHON%" -m pip install anthropic plotly python-dotenv --prefer-binary -q
-"%PYTHON%" -m pip install pandas --only-binary=:all: -q
-"%PYTHON%" -m pip install streamlit --no-deps -q
-"%PYTHON%" -m pip install altair blinker cachetools click gitpython requests rich tenacity toml tornado watchdog pydeck --prefer-binary -q
-"%PYTHON%" -m pip install "protobuf>=3.20,<7" --only-binary=:all: -q
+"%PYTHON%" -m pip install -r requirements.txt --prefer-binary -q
 if %ERRORLEVEL% NEQ 0 (
-    echo [WARNING] Some packages may have issues, but continuing...
+    echo [ERROR] Package installation failed.
+    pause
+    exit /b 1
 )
 echo [OK] Packages installed.
 echo.
 
-:: ── Set up database ───────────────────────────────────────────
-echo [STEP 2/3] Setting up SQLite database...
+echo [STEP 2/4] Ensuring hr_data.db exists...
 if exist "hr_data.db" (
-    echo [OK] hr_data.db already exists, skipping.
+    echo [OK] hr_data.db already exists.
 ) else (
     "%PYTHON%" setup_db.py
     if %ERRORLEVEL% NEQ 0 (
-        echo [ERROR] Database setup failed. Make sure WA_Fn-UseC_-HR-Employee-Attrition.csv
-        echo         is in the parent folder of hr_agent_platform\
+        echo [ERROR] Database setup failed. Ensure the HR CSV is available.
         pause
         exit /b 1
     )
 )
 echo.
 
-:: ── Set up .env ───────────────────────────────────────────────
+echo [STEP 3/4] Ensuring .env exists...
 if not exist ".env" (
     copy ".env.example" ".env" >nul
-    echo [INFO] Created .env file. You can add your API key there, or enter it in the app sidebar.
+    echo [OK] Created .env. Update it if you want a specific provider or API key.
+) else (
+    echo [OK] .env already exists.
 )
+echo.
 
-:: ── Launch Streamlit ──────────────────────────────────────────
-echo [STEP 3/3] Launching HR Intelligence Platform...
+echo [STEP 4/4] Launching HR Insights Platform...
 echo.
 echo ============================================================
-echo  App will open at: http://localhost:8501
+echo  App will open at: http://localhost:8000
 echo  Press Ctrl+C to stop the server
 echo ============================================================
 echo.
 
-"%PYTHON%" -m streamlit run app.py --server.port 8501 --browser.gatherUsageStats false
+"%PYTHON%" -m uvicorn server:app --host 127.0.0.1 --port 8000
 
 pause

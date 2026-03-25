@@ -2,6 +2,75 @@
 
 This file records the major architectural changes and implementation milestones in the repository. It is intended to help future maintainers understand not only what changed, but why it changed.
 
+## v1.8 - Memory-Aware Agent UX, Visualization Controls, And Report Export
+
+Summary:
+- expanded the agent from recent-turn memory into broader past-interaction retrieval with reusable helpful answers
+- upgraded the web UX with guided topic exploration, response feedback capture, and more intentional visualization/report actions
+- tightened report and visualization behavior so roster-style outputs download cleanly while aggregate tables still support chart exploration
+
+Key agent and UX additions:
+- the orchestrator now searches stored user interactions for related question/answer pairs before answering
+- positively rated responses can be surfaced as helpful examples for similar future questions
+- assistant responses now include `Yes` / `No` feedback controls backed by `conversation_memory.feedback_score`
+- home-screen topic chips now expand into sample scoped HR questions
+- visualization follow-ups continue to inherit the latest generated table context
+- visualization option cards remain available for small aggregate tables, but not for large roster or report-style tables
+- standard reports now present a `Download Excel` action instead of a visualization CTA
+
+Reporting and export changes:
+- standard reports continue to run through `generate_standard_report`
+- the backend now exposes an authenticated Excel export path for standard reports
+- report previews can show truncated row counts in the UI while the export regenerates the full scoped report server-side
+
+Documentation outcomes:
+- README now includes clearer change-log guidance and a dedicated new-agent-features section
+- architecture and implementation docs now describe feedback capture, broader memory retrieval, report export, and visualization gating
+- data dictionary and runbook documentation now reflect the richer memory model and operational checks
+
+Why this mattered:
+- recent conversations and positively rated answers are high-signal context for a governed internal analytics assistant
+- users needed clearer affordances: charts for aggregates, exports for rosters, and guided prompts for discovery
+- the repo needed an explicit release narrative so future maintainers can understand the cluster of related frontend, orchestration, and reporting changes together
+
+## v1.7 - Security Tightening And Browser API Key Support
+
+Summary:
+- tightened several auth and access-control paths after the FastAPI-only migration
+- restored direct API key entry in the web UI while keeping environment keys as a supported fallback
+- refreshed the docs to match the current runtime behavior
+
+Key fixes and updates:
+- fixed local cookie defaults so dev sign-in works over plain HTTP
+- changed unknown access profiles from a server error into a controlled 403 response
+- hardened department scoping so lowercase SQL does not bypass or break scoped queries
+- restricted context-document endpoints to the caller's allowed document tags
+- restored optional API key entry in the Connect LLM modal and request payload
+- updated README, architecture, implementation, and runbook docs to match the live platform
+
+Why this mattered:
+- the security hardening introduced a few regressions in local usability and access handling
+- the browser UI had lost a workflow that was still useful for developer testing
+- the docs needed to reflect the current agent contract, not an intermediate refactor state
+
+## v1.6 - Legacy Streamlit Removal
+
+Summary:
+- removed the obsolete Streamlit frontend and its leftover deployment references
+- aligned the repo around a single supported runtime: FastAPI plus the browser UI
+
+Files and surfaces removed or updated:
+- removed `app.py`
+- removed `.streamlit/` configuration files
+- removed the `streamlit` dependency from `requirements.txt`
+- updated Windows launchers to start `uvicorn` instead of Streamlit
+- updated `Dockerfile` and `render.yaml` to target the FastAPI app
+
+Why this change was made:
+- the Streamlit app no longer matched the live agent contract
+- it required a different auth and session story than the supported web product
+- leaving it in the repo created onboarding confusion and stale deployment paths
+
 ## v1.5 - Documentation Refresh For Internal Deployment
 
 Summary:
@@ -45,7 +114,6 @@ Design rationale:
 
 Summary:
 - introduced the FastAPI backend and browser UI
-- kept Streamlit as a secondary interface
 
 Why the change was made:
 - the browser UI allows better streaming, richer cards, and clearer control over auth and scope

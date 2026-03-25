@@ -72,10 +72,10 @@
         <input id="modelInput" type="text" placeholder="Model name" class="sidebar-input" autocomplete="off" />
         <label class="modal-label" id="baseUrlLabel">Base URL</label>
         <input id="baseUrlInput" type="text" placeholder="Base URL" class="sidebar-input" autocomplete="off" />
-        <label class="modal-label">Credential</label>
-        <input id="apiKeyInput" type="password" placeholder="Optional for local OpenAI-compatible endpoints" class="sidebar-input" autocomplete="off" />
+        <label class="modal-label" id="apiKeyLabel">API Key</label>
+        <input id="apiKeyInput" type="password" placeholder="API key" class="sidebar-input" autocomplete="off" />
       </div>
-      <p class="modal-note">Choose a provider your role is allowed to use. Local Llama, Anthropic, and OpenAI-compatible endpoints all work through the same governed chat flow.</p>
+      <p class="modal-note" id="llmModalNote">Choose a provider and model. You can use an API key from this browser session or rely on the server-side environment configuration. Local Llama, Anthropic, and OpenAI-compatible endpoints all work through the same governed chat flow.</p>
     </div>
   </div>
 
@@ -160,7 +160,6 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <div class="scope-pill hidden" id="scopePill"></div>
           <button class="connect-btn" id="connectLlmBtn">Connect LLM</button>
           <div class="user-badge hidden" id="userBadge"></div>
           <button class="logout-btn hidden" id="logoutBtn">Sign Out</button>
@@ -202,6 +201,7 @@
             </button>
           </div>
           <div class="metric-examples" id="metricExamples"></div>
+          <div class="topic-suggestions hidden" id="topicSuggestions"></div>
         </div>
       </div>
 
