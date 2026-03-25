@@ -1360,6 +1360,7 @@ function markdownToHtml(markdown) {
   let codeFence = [];
   let listType = null;
   let paragraph = [];
+  let tableLines = [];
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -1373,10 +1374,23 @@ function markdownToHtml(markdown) {
     listType = null;
   };
 
+  const flushTable = () => {
+    if (!tableLines.length) return;
+    const tableHtml = renderMarkdownTable(tableLines);
+    if (tableHtml) {
+      html.push(tableHtml);
+    } else {
+      paragraph.push(...tableLines.map((line) => line.trim()));
+    }
+    tableLines = [];
+  };
+
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
+    const trimmed = line.trim();
 
-    if (line.startsWith("```")) {
+    if (trimmed.startsWith("```")) {
+      flushTable();
       flushParagraph();
       closeList();
       if (inCodeBlock) {
@@ -1394,13 +1408,39 @@ function markdownToHtml(markdown) {
       continue;
     }
 
-    if (!line.trim()) {
+    if (!trimmed) {
+      flushTable();
       flushParagraph();
       closeList();
       continue;
     }
 
-    const bulletMatch = line.match(/^[-*]\s+(.*)$/);
+    if (isPipeTableLine(trimmed)) {
+      flushParagraph();
+      closeList();
+      tableLines.push(trimmed);
+      continue;
+    }
+
+    flushTable();
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      flushParagraph();
+      closeList();
+      const level = Math.min(headingMatch[1].length, 6);
+      html.push(`<h${level}>${renderInline(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    if (/^([-*_])(?:\s*\1){2,}\s*$/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      html.push("<hr />");
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^[-*]\s+(.*)$/);
     if (bulletMatch) {
       flushParagraph();
       if (listType !== "ul") {
@@ -1412,7 +1452,7 @@ function markdownToHtml(markdown) {
       continue;
     }
 
-    const orderedMatch = line.match(/^\d+\.\s+(.*)$/);
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.*)$/);
     if (orderedMatch) {
       flushParagraph();
       if (listType !== "ol") {
@@ -1425,9 +1465,10 @@ function markdownToHtml(markdown) {
     }
 
     closeList();
-    paragraph.push(line.trim());
+    paragraph.push(trimmed);
   }
 
+  flushTable();
   flushParagraph();
   closeList();
 
@@ -1443,6 +1484,62 @@ function renderInline(text) {
   rendered = rendered.replace(/`([^`]+)`/g, "<code>$1</code>");
   rendered = rendered.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   return rendered;
+}
+
+function isPipeTableLine(line) {
+  const trimmed = String(line || "").trim();
+  const pipeCount = (trimmed.match(/\|/g) || []).length;
+  return pipeCount >= 2 && (trimmed.startsWith("|") || trimmed.endsWith("|"));
+}
+
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(row) {
+  return Array.isArray(row) && row.length > 0 && row.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function normalizeMarkdownTableRow(row, columnCount) {
+  const cells = Array.isArray(row) ? row.slice(0, columnCount) : [];
+  while (cells.length < columnCount) cells.push("");
+  return cells;
+}
+
+function renderMarkdownTable(lines) {
+  if (!Array.isArray(lines) || lines.length < 2) return "";
+
+  const rows = lines.map(splitMarkdownTableRow).filter((row) => row.length && row.some((cell) => cell.length));
+  if (rows.length < 2 || !isMarkdownTableSeparator(rows[1])) {
+    return "";
+  }
+
+  const header = rows[0];
+  const columnCount = header.length;
+  const bodyRows = rows
+    .slice(2)
+    .map((row) => normalizeMarkdownTableRow(row, columnCount))
+    .filter((row) => row.some((cell) => cell.trim()));
+
+  if (!columnCount || !bodyRows.length) {
+    return "";
+  }
+
+  const headHtml = header.map((cell) => `<th>${renderInline(cell)}</th>`).join("");
+  const bodyHtml = bodyRows.map((row) => {
+    const cells = row.map((cell) => `<td>${renderInline(cell)}</td>`).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+
+  return `
+    <div class="md-table-wrap">
+      <table class="md-table">
+        <thead><tr>${headHtml}</tr></thead>
+        <tbody>${bodyHtml}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 function formatCell(value) {
