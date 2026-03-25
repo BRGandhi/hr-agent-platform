@@ -12,6 +12,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from config import LLM_TIMEOUT_SECONDS
 
@@ -161,7 +162,17 @@ class AnthropicLLMClient(BaseLLMClient):
 class OpenAICompatibleLLMClient(BaseLLMClient):
     def __init__(self, config: LLMConfig):
         super().__init__(config)
-        from openai import OpenAI
+        from openai import (
+            APIConnectionError,
+            APIStatusError,
+            APITimeoutError,
+            AuthenticationError,
+            BadRequestError,
+            NotFoundError,
+            OpenAI,
+            PermissionDeniedError,
+            RateLimitError,
+        )
 
         client_kwargs: dict[str, Any] = {
             "api_key": self.config.api_key or "not-needed",
@@ -169,6 +180,14 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
         }
         if self.config.base_url:
             client_kwargs["base_url"] = self.config.base_url
+        self._api_connection_error = APIConnectionError
+        self._api_status_error = APIStatusError
+        self._api_timeout_error = APITimeoutError
+        self._authentication_error = AuthenticationError
+        self._bad_request_error = BadRequestError
+        self._not_found_error = NotFoundError
+        self._permission_denied_error = PermissionDeniedError
+        self._rate_limit_error = RateLimitError
         self.client = OpenAI(**client_kwargs)
 
     def create_response(self, system_prompt: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
@@ -183,8 +202,47 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
                 tool_choice="auto",
                 temperature=0.2,
             )
+        except self._authentication_error as exc:
+            raise LLMClientError("Invalid OpenAI-compatible API key.") from exc
+        except self._permission_denied_error as exc:
+            raise LLMClientError("OpenAI-compatible access denied. Confirm your API key and project permissions.") from exc
+        except self._rate_limit_error as exc:
+            raise LLMClientError("OpenAI-compatible rate limit reached. Please try again shortly.") from exc
+        except self._api_timeout_error as exc:
+            raise LLMClientError("OpenAI-compatible request timed out. Please try again.") from exc
+        except self._api_connection_error as exc:
+            endpoint = self._openai_endpoint_label()
+            detail = self._exception_detail(exc)
+            message = (
+                f"Could not reach {endpoint}. Check the Base URL, outbound internet access, "
+                "or any proxy / firewall settings."
+            )
+            if detail:
+                message = f"{message} Details: {detail}"
+            raise LLMClientError(message) from exc
+        except self._not_found_error as exc:
+            raise LLMClientError(
+                f"Model '{self.config.model}' was not found at {self._openai_endpoint_label()}. "
+                "Confirm the model name and endpoint."
+            ) from exc
+        except self._bad_request_error as exc:
+            detail = self._exception_detail(exc)
+            message = f"OpenAI-compatible request was rejected for model '{self.config.model}'."
+            if detail:
+                message = f"{message} Details: {detail}"
+            raise LLMClientError(message) from exc
+        except self._api_status_error as exc:
+            detail = self._exception_detail(exc)
+            message = f"OpenAI-compatible API error ({exc.status_code}) from {self._openai_endpoint_label()}."
+            if detail:
+                message = f"{message} Details: {detail}"
+            raise LLMClientError(message) from exc
         except Exception as exc:
-            raise LLMClientError(f"OpenAI-compatible provider error: {type(exc).__name__}") from exc
+            detail = self._exception_detail(exc)
+            message = f"OpenAI-compatible provider error: {type(exc).__name__}"
+            if detail:
+                message = f"{message}. Details: {detail}"
+            raise LLMClientError(message) from exc
 
         message = response.choices[0].message
         tool_calls: list[ToolCall] = []
@@ -256,6 +314,22 @@ class OpenAICompatibleLLMClient(BaseLLMClient):
             }
             for tool in tools
         ]
+
+    def _openai_endpoint_label(self) -> str:
+        endpoint = self.config.base_url or "https://api.openai.com/v1"
+        parsed = urlparse(endpoint)
+        if parsed.scheme and parsed.netloc:
+            path = parsed.path.rstrip("/")
+            return f"{parsed.scheme}://{parsed.netloc}{path}"
+        return endpoint
+
+    def _exception_detail(self, exc: Exception) -> str:
+        detail = str(exc).strip()
+        cause = getattr(exc, "__cause__", None)
+        cause_detail = str(cause).strip() if cause else ""
+        if cause_detail and cause_detail not in detail:
+            return f"{detail} ({cause_detail})" if detail else cause_detail
+        return detail
 
 
 def create_llm_client(config: LLMConfig) -> BaseLLMClient:

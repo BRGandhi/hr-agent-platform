@@ -169,18 +169,18 @@ AUTH_REQUIRED=true
 DEV_SSO_ENABLED=true
 ```
 
-Local Ollama example:
+OpenAI-compatible example:
 
 ```env
 DEFAULT_LLM_PROVIDER=openai-compatible
-DEFAULT_OPENAI_COMPAT_MODEL=llama3.1:8b
-DEFAULT_OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
-OPENAI_API_KEY=
+DEFAULT_OPENAI_COMPAT_MODEL=gpt-5.2
+DEFAULT_OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=sk-...
 AUTH_REQUIRED=true
 DEV_SSO_ENABLED=true
 ```
 
-You can provide API keys either in `.env` or directly in the Connect LLM modal.
+You can provide API keys either in `.env` or directly in the Connect LLM modal. If you still want a local Ollama flow, override the model and base URL in `.env` or in the modal.
 
 ### 5. Prepare the dataset
 
@@ -266,8 +266,8 @@ Recommended practice for future updates:
 | `DEFAULT_LLM_MODEL` | `claude-opus-4-6` | Anthropic model id |
 | `ANTHROPIC_API_KEY` | empty | Anthropic credential |
 | `OPENAI_API_KEY` | empty | OpenAI-compatible provider credential |
-| `DEFAULT_OPENAI_COMPAT_MODEL` | `llama3.1:8b` | OpenAI-compatible default model |
-| `DEFAULT_OPENAI_COMPAT_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible base URL |
+| `DEFAULT_OPENAI_COMPAT_MODEL` | `gpt-5.2` | OpenAI-compatible default model |
+| `DEFAULT_OPENAI_COMPAT_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `SESSION_TTL_MINUTES` | `120` | Idle session cleanup window |
 | `AUTH_REQUIRED` | `true` | Require sign-in before use |
 | `DEV_SSO_ENABLED` | `true` | Enable demo SSO flow |

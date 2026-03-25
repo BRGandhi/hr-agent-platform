@@ -111,9 +111,9 @@ The current configurable items are defined in [config.py](config.py).
 
 ```env
 DEFAULT_LLM_PROVIDER=openai-compatible
-DEFAULT_OPENAI_COMPAT_MODEL=llama3.1:8b
-DEFAULT_OPENAI_COMPAT_BASE_URL=http://localhost:11434/v1
-OPENAI_API_KEY=
+DEFAULT_OPENAI_COMPAT_MODEL=gpt-5.2
+DEFAULT_OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=sk-...
 SESSION_TTL_MINUTES=120
 AUTH_REQUIRED=true
 DEV_SSO_ENABLED=true
@@ -133,7 +133,7 @@ DEV_SSO_ENABLED=true
 ### Notes
 - `DEV_SSO_ENABLED=true` enables the demo sign-in flow.
 - `AUTH_REQUIRED=false` bypasses the auth shell and resolves the user as local admin.
-- `DEFAULT_OPENAI_COMPAT_BASE_URL` is what makes local Ollama or another OpenAI-compatible server work.
+- `DEFAULT_OPENAI_COMPAT_BASE_URL` points at the OpenAI API by default, but it can still be changed to Ollama or another OpenAI-compatible server.
 - `SECURE_COOKIES=false` is the right local default for `http://127.0.0.1:8000`; set it to `true` only behind HTTPS.
 - `CORS_ALLOWED_ORIGINS` should list only your trusted frontend origins outside local development.
 - API keys can be entered either in `.env` or in the Connect LLM modal.

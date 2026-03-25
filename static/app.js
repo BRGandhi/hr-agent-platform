@@ -27,6 +27,8 @@ const state = {
   activeTopic: "",
 };
 
+const LEGACY_OPENAI_COMPAT_MODEL = "llama3.1:8b";
+const LEGACY_OPENAI_COMPAT_BASE_URL = "http://localhost:11434/v1";
 const TABLE_VISUAL_MAX_ROWS = 12;
 const TABLE_VISUAL_MAX_COLUMNS = 4;
 
@@ -90,6 +92,7 @@ function wireUiEvents() {
   modelInput.addEventListener("input", () => {
     state.model = modelInput.value.trim();
     localStorage.setItem("hr_model", state.model);
+    normalizeOpenAiCompatConnection({ notify: true });
     updateConnectionButton();
     updateTopbarSub();
   });
@@ -186,6 +189,7 @@ async function loadRuntimeConfig() {
     state.provider = state.provider || config.default_provider || "anthropic";
     state.model = state.model || defaultModelForProvider(config, state.provider);
     state.baseUrl = state.baseUrl || defaultBaseUrlForProvider(config, state.provider);
+    migrateLegacyOpenAiCompatDefaults(config);
 
     providerSelect.value = state.provider;
     modelInput.value = state.model;
@@ -196,6 +200,72 @@ async function loadRuntimeConfig() {
   } catch (error) {
     showToast(error.message || "Could not load app configuration.", true);
   }
+}
+
+function migrateLegacyOpenAiCompatDefaults(config) {
+  if (state.provider !== "openai-compatible") return;
+
+  const nextModel = defaultModelForProvider(config, state.provider);
+  const nextBaseUrl = defaultBaseUrlForProvider(config, state.provider);
+  const targetModel = state.model || nextModel;
+  const shouldReplaceModel = !state.model || state.model === LEGACY_OPENAI_COMPAT_MODEL;
+  const shouldReplaceBaseUrl =
+    !state.baseUrl
+    || normalizeEndpointUrl(state.baseUrl) === normalizeEndpointUrl(LEGACY_OPENAI_COMPAT_BASE_URL)
+    || (looksLikeHostedOpenAiModel(targetModel) && isLegacyLocalEndpoint(state.baseUrl));
+
+  if (shouldReplaceModel && nextModel) {
+    state.model = nextModel;
+    localStorage.setItem("hr_model", state.model);
+  }
+  if (shouldReplaceBaseUrl && nextBaseUrl) {
+    state.baseUrl = nextBaseUrl;
+    localStorage.setItem("hr_base_url", state.baseUrl);
+  }
+}
+
+function normalizeEndpointUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "").toLowerCase();
+}
+
+function isLegacyLocalEndpoint(value) {
+  const normalized = normalizeEndpointUrl(value);
+  return normalized.includes("localhost:11434") || normalized.includes("127.0.0.1:11434");
+}
+
+function looksLikeHostedOpenAiModel(model) {
+  const normalized = String(model || "").trim().toLowerCase();
+  return (
+    normalized.startsWith("gpt-")
+    || normalized.startsWith("o1")
+    || normalized.startsWith("o3")
+    || normalized.startsWith("o4")
+    || normalized.startsWith("codex-")
+  );
+}
+
+function normalizeOpenAiCompatConnection({ notify = false } = {}) {
+  if (state.provider !== "openai-compatible") return false;
+
+  const hostedBaseUrl = getProviderOption("openai-compatible")?.base_url_placeholder || "";
+  if (!hostedBaseUrl || !looksLikeHostedOpenAiModel(state.model) || !isLegacyLocalEndpoint(state.baseUrl)) {
+    return false;
+  }
+
+  state.baseUrl = hostedBaseUrl;
+  baseUrlInput.value = state.baseUrl;
+  localStorage.setItem("hr_base_url", state.baseUrl);
+
+  if ((!state.model || state.model === LEGACY_OPENAI_COMPAT_MODEL) && getProviderOption("openai-compatible")?.model_placeholder) {
+    state.model = getProviderOption("openai-compatible").model_placeholder;
+    modelInput.value = state.model;
+    localStorage.setItem("hr_model", state.model);
+  }
+
+  if (notify) {
+    showToast("Switched Base URL to the OpenAI API for the selected GPT model.");
+  }
+  return true;
 }
 
 async function loadAuthConfig() {
@@ -703,6 +773,7 @@ async function handleSend() {
 
   const text = chatInput.value.trim();
   if (!text || state.isLoading) return;
+  normalizeOpenAiCompatConnection();
   const tableContext = buildOutgoingTableContext(text);
 
   const payload = {
