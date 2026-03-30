@@ -311,3 +311,7 @@ This repository is useful as a bank-internal prototype or reference implementati
 - consider moving the in-memory rate limiter to shared infrastructure for multi-instance deployments
 
 These gaps are documented in more detail in [docs/RUNBOOK.md](docs/RUNBOOK.md) and [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
