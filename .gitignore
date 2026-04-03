@@ -16,6 +16,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+tests/codex_test_*/
 .Python
 *.egg-info/
 dist/

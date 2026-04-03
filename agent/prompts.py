@@ -12,26 +12,27 @@ def build_system_prompt(
     helpful_memory: list[dict],
     context_documents: list[dict],
     latest_table_context: dict | None = None,
+    route: str = "",
 ) -> str:
     recent_memory_block = "\n".join(
-        f"- Q: {item['question']}\n  A: {item['response'][:220]}"
+        f"- Q: {item['question']}\n  A: {item['response'][:140]}"
         for item in recent_memory
     ) or "- No prior user memory yet."
 
     related_memory_block = "\n".join(
-        f"- Q: {item['question']}\n  A: {item['response'][:220]}"
+        f"- Q: {item['question']}\n  Snippet: {item['response'][:120]}"
         for item in related_memory
-    ) or "- No older related chats matched this request."
+    ) or "- No older related chats were preloaded."
 
     helpful_memory_block = "\n".join(
-        f"- Helpful Q: {item['question']}\n  Helpful A: {item['response'][:220]}"
+        f"- Helpful Q: {item['question']}\n  Helpful pattern: {item['response'][:120]}"
         for item in helpful_memory
-    ) or "- No previously upvoted similar answers found."
+    ) or "- No previously helpful similar answers were preloaded."
 
     docs_block = "\n".join(
-        f"- {doc['title']} [{', '.join(doc['tags'])}]: {doc['content'][:320]}"
+        f"- {doc['title']} [{', '.join(doc['tags'])}]: {doc['content'][:160]}"
         for doc in context_documents
-    ) or "- No matching context documents retrieved."
+    ) or "- No context documents were preloaded."
 
     allowed_departments = access_profile.get("allowed_departments") or ["All departments"]
     allowed_metrics = access_profile.get("allowed_metrics") or ["headcount", "attrition"]
@@ -59,6 +60,7 @@ respond that the request is out of scope for this platform and stop.
 - Scope name: {access_profile.get("scope_name", "Assigned Scope")}
 - Allowed departments: {", ".join(allowed_departments)}
 - Allowed metric domains: {", ".join(allowed_metrics)}
+- Request route hint: {route or "data_query"}
 
 ## Hard Access Rules
 - Never answer questions outside HR insights.
@@ -73,36 +75,46 @@ respond that the request is out of scope for this platform and stop.
 {HR_SCHEMA}
 
 ## Context Memory
-Recent user interactions:
+Recent user interactions kept for conversational continuity:
 {recent_memory_block}
 
-Related past interactions from the broader chat history:
+Related past interactions preloaded for this turn:
 {related_memory_block}
 
-Previously upvoted helpful answers for similar questions:
+Previously helpful answer patterns preloaded for this turn:
 {helpful_memory_block}
 
-Relevant context documents:
+Relevant context documents preloaded for this turn:
 {docs_block}
 
 ## Latest Table Context
 {latest_table_block}
 
 ## How to Respond
-1. Use `query_hr_database` for scoped HR data questions.
-2. Use `calculate_metrics` for approved HR calculations only.
-3. If the user asks to turn a generated table into a visual, compare visualization options, or says things like
+1. Use `search_past_chats` when you need more than the compact memory briefing above.
+   Keep retrieval narrow and request a small number of items.
+2. Use `search_context_documents` when you need policy, access-rule, metric-definition, or schema context beyond what is preloaded.
+   Keep retrieval narrow and request a small number of items.
+3. Use `query_hr_database` for scoped HR data questions.
+   Use `employees_current` or `employees` for current snapshot questions.
+   Do not claim month-over-month or last-12-month findings because the demo dataset is a single snapshot.
+4. Use `calculate_metrics` for approved HR calculations only.
+5. If the user asks to turn a generated table into a visual, compare visualization options, or says things like
    "chart that", "visualize this table", or "show me a few graph options", use `suggest_visualizations` first.
    The latest table context above is available to visualization tools even if `data` is omitted.
-4. Use `create_visualization` when the user clearly asks for one specific chart type or already chose a visual option.
-5. Use `get_attrition_insights` only when attrition access is allowed.
-6. Use `generate_standard_report` when the user asks for a standard report, employee-level report,
+6. Use `create_visualization` when the user clearly asks for one specific chart type or already chose a visual option.
+7. Use `get_attrition_insights` only when attrition access is allowed.
+8. Use `generate_standard_report` when the user asks for a standard report, employee-level report,
    name-by-name report, active headcount roster, or attrition roster.
-7. If the request is outside HR insights or outside role access, return a concise refusal.
+9. If the request is outside HR insights or outside role access, return a concise refusal.
+10. Prefer targeted retrieval over replaying or assuming history. Do not ask for large context dumps when a small retrieval will do.
 
 ## Style
 - Lead with the key HR finding.
 - Be concise and professional.
+- Format responses in clean Markdown with short sections when helpful.
+- Prefer bullets, compact label/value summaries, and Markdown tables over dense walls of text.
+- Keep paragraphs short and leave blank lines between sections so the UI renders clearly.
 - Reference the filtered dataset scope used for the answer.
 - Reuse the structure of previously helpful answers when it fits the user's current question, but do not copy stale details that no longer match the scoped data.
 - Do not invent external facts or policy details that are not present in the retrieved context.

@@ -19,7 +19,7 @@ HR_SCOPE_KEYWORDS = {
 METRIC_KEYWORDS = {
     "headcount": {"headcount", "hc", "employee count", "how many", "total employees", "org size"},
     "attrition": {"attrition", "turnover", "retention", "left", "leavers", "overtime", "risk"},
-    "compensation": {"salary", "compensation", "income", "pay", "bonus", "hike", "rate"},
+    "compensation": {"salary", "compensation", "income", "pay", "bonus", "hike"},
     "performance": {"performance", "rating", "review"},
     "satisfaction": {"satisfaction", "engagement", "work-life", "environment", "relationship"},
     "tenure": {"tenure", "years", "promotion", "experience", "working years"},

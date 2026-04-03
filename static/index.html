@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=20260403n" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 </head>
 <body>
@@ -99,43 +99,76 @@
 
       <hr class="sidebar-divider" />
 
-      <div class="sidebar-section-label">Database</div>
-      <div id="dbStatus" class="status-pill loading">Connecting...</div>
-      <div id="dbCaption" class="sidebar-caption"></div>
-
-      <hr class="sidebar-divider" />
-
-      <div class="sidebar-section-label">Settings</div>
-      <label class="toggle-label">
-        <input type="checkbox" id="showToolCalls" checked />
-        <span class="toggle-track"><span class="toggle-thumb"></span></span>
-        Show tool calls
-      </label>
-
-      <hr class="sidebar-divider" />
-
-      <div class="sidebar-section-label">Example Questions</div>
-      <div id="examples" class="examples-list">
-        <button class="example-btn" data-q="What is the headcount for my team?">What is the headcount for my team?</button>
-        <button class="example-btn" data-q="What is the attrition rate for my scope?">What is the attrition rate for my scope?</button>
-        <button class="example-btn" data-q="Show attrition by department as a chart">Show attrition by department as a chart</button>
-        <button class="example-btn" data-q="Generate an active headcount report for my scope">Generate an active headcount report for my scope</button>
-        <button class="example-btn" data-q="Generate an attrition report for my scope">Generate an attrition report for my scope</button>
-      </div>
-
-      <hr class="sidebar-divider" />
-
-      <div class="sidebar-section-label">Previously Asked</div>
-      <div id="historyList" class="history-list">
-        <div class="history-empty">No prior HR questions yet</div>
-      </div>
-
-      <hr class="sidebar-divider" />
-
       <button class="btn-new-chat" id="newChatBtn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New Conversation
       </button>
+
+      <hr class="sidebar-divider" />
+
+      <button type="button" class="sidebar-section-toggle" data-section-toggle="favorites" aria-expanded="true">
+        <span class="sidebar-section-label">Favorite Chats</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="sidebar-section-body" data-section-body="favorites">
+        <div class="sidebar-caption" id="favoriteChatsCaption">Your highest-signal chats based on past usage and feedback.</div>
+        <div class="sidebar-subsection">
+          <div class="sidebar-mini-label">Favorite Topics</div>
+          <div id="favoriteTopics" class="favorite-topics"></div>
+        </div>
+        <div class="sidebar-subsection">
+          <div class="sidebar-mini-label">Favorite Chats</div>
+          <div id="examples" class="examples-list">
+            <div class="history-empty">Loading favorite chats...</div>
+          </div>
+        </div>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <button type="button" class="sidebar-section-toggle" data-section-toggle="relevant" aria-expanded="true">
+        <span class="sidebar-section-label">Relevant Chats</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="sidebar-section-body" data-section-body="relevant">
+        <div class="sidebar-caption" id="relevantHistoryCaption">Role-aware chats based on the question types you ask most often.</div>
+        <div id="relevantHistoryList" class="history-list">
+          <div class="history-empty">Loading relevant chats...</div>
+        </div>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <button type="button" class="sidebar-section-toggle" data-section-toggle="past" aria-expanded="true">
+        <span class="sidebar-section-label">Past Chats</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+      </button>
+      <div class="sidebar-section-body" data-section-body="past">
+        <div class="sidebar-caption" id="pastHistoryCaption">Questions asked across your prior sessions.</div>
+        <div id="pastHistoryList" class="history-list">
+          <div class="history-empty">Loading past chats...</div>
+        </div>
+      </div>
+
+      <hr class="sidebar-divider" />
+
+      <div class="sidebar-section-label">Settings</div>
+      <div class="sidebar-settings-card">
+        <div class="sidebar-settings-group">
+          <div class="sidebar-settings-head">
+            <span class="sidebar-settings-title">Database</span>
+            <div id="dbStatus" class="status-pill loading">Connecting...</div>
+          </div>
+          <div id="dbCaption" class="sidebar-caption sidebar-settings-caption"></div>
+        </div>
+        <div class="sidebar-settings-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="showToolCalls" checked />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Show tool calls
+          </label>
+        </div>
+      </div>
     </aside>
 
     <div class="main">
@@ -156,7 +189,7 @@
           </span>
           <div>
             <div class="topbar-title">HR Insights Platform</div>
-            <div class="topbar-sub" id="topbarSub">Only HR insights and role-approved workforce questions are supported</div>
+            <div class="topbar-sub" id="topbarSub"></div>
           </div>
         </div>
         <div class="topbar-actions">
@@ -165,8 +198,7 @@
           <button class="logout-btn hidden" id="logoutBtn">Sign Out</button>
         </div>
       </header>
-
-      <div class="kpi-strip" id="kpiStrip"></div>
+      <div class="topbar-reveal hidden" id="topbarReveal"></div>
 
       <div class="messages" id="messages">
         <div class="empty-state" id="emptyState">
@@ -181,25 +213,8 @@
             </svg>
           </div>
           <h2 class="empty-title">Your HR Intelligence Partner</h2>
-          <p class="empty-sub">The platform enforces role-based data access, remembers prior HR questions, and pulls relevant HR policy or schema context into answers.</p>
-          <div class="suggestion-grid">
-            <button class="suggestion-card" data-q="What is the current headcount in my scope?">
-              <span class="suggestion-icon">KPI</span>
-              <span>What is the current headcount in my scope?</span>
-            </button>
-            <button class="suggestion-card" data-q="Show attrition by department for my scope">
-              <span class="suggestion-icon">Risk</span>
-              <span>Show attrition by department for my scope</span>
-            </button>
-            <button class="suggestion-card" data-q="Generate an active headcount report for my scope">
-              <span class="suggestion-icon">Report</span>
-              <span>Generate an active headcount report for my scope</span>
-            </button>
-            <button class="suggestion-card" data-q="Generate an attrition report for my scope">
-              <span class="suggestion-icon">Report</span>
-              <span>Generate an attrition report for my scope</span>
-            </button>
-          </div>
+          <p class="empty-sub">Generate reports, visualizations, and insights from your scoped HR data. Your center board then highlights the workforce KPIs and follow-up questions you revisit most often, using your scope and prior HR question patterns.</p>
+          <div class="empty-kpi-board" id="centerKpiBoard"></div>
           <div class="metric-examples" id="metricExamples"></div>
           <div class="topic-suggestions hidden" id="topicSuggestions"></div>
         </div>
@@ -218,13 +233,13 @@
             <svg id="loadingIcon" class="spin hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" opacity=".25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="16" /></svg>
           </button>
         </div>
-        <p class="input-hint">Out-of-scope and unauthorized requests are blocked automatically. You can also ask for an active headcount report or an attrition report.</p>
+        <p class="input-hint">Out-of-scope and unauthorized requests are blocked automatically.</p>
       </div>
     </div>
   </div>
 
   <div class="toast hidden" id="toast"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260403n"></script>
 </body>
 </html>

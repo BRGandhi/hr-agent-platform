@@ -8,6 +8,20 @@
  * - Auth modal is non-dismissible until authenticated
  */
 
+const DEFAULT_SIDEBAR_SECTIONS = {
+  favorites: false,
+  relevant: false,
+  past: false,
+};
+
+function loadSidebarSections() {
+  try {
+    return { ...DEFAULT_SIDEBAR_SECTIONS, ...JSON.parse(localStorage.getItem("hr_sidebar_sections") || "{}") };
+  } catch {
+    return { ...DEFAULT_SIDEBAR_SECTIONS };
+  }
+}
+
 const state = {
   sessionId: localStorage.getItem("hr_session_id") || "",
   isLoading: false,
@@ -21,16 +35,47 @@ const state = {
   authProviders: [],
   user: null,
   accessProfile: null,
+  stats: null,
   lastTable: null,
   pendingTableContext: null,
   feedbackByMemory: {},
   activeTopic: "",
+  activeDiveTopic: "",
+  activeTopbarPanel: "",
+  historyRequestToken: 0,
+  sidebarSections: loadSidebarSections(),
+  historySummary: {
+    favoriteTopics: [],
+    favoriteKpis: [],
+    favoriteQuestions: [],
+  },
+  scopedPrompts: [],
 };
 
 const LEGACY_OPENAI_COMPAT_MODEL = "llama3.1:8b";
 const LEGACY_OPENAI_COMPAT_BASE_URL = "http://localhost:11434/v1";
 const TABLE_VISUAL_MAX_ROWS = 12;
 const TABLE_VISUAL_MAX_COLUMNS = 4;
+const SECTION_HEADING_HINTS = new Set([
+  "analysis",
+  "breakdown",
+  "details",
+  "highlights",
+  "key takeaway",
+  "key takeaways",
+  "main takeaway",
+  "main takeaways",
+  "next step",
+  "next steps",
+  "observation",
+  "observations",
+  "recommendation",
+  "recommendations",
+  "risks",
+  "summary",
+  "what this means",
+  "why it matters",
+]);
 
 const $ = (id) => document.getElementById(id);
 const authShell = $("authShell");
@@ -53,27 +98,33 @@ const sendIcon = $("sendIcon");
 const loadingIcon = $("loadingIcon");
 const messagesEl = $("messages");
 const emptyState = $("emptyState");
-const kpiStrip = $("kpiStrip");
 const dbStatus = $("dbStatus");
 const dbCaption = $("dbCaption");
 const examplesEl = $("examples");
-const historyList = $("historyList");
+const favoriteTopicsEl = $("favoriteTopics");
+const favoriteChatsCaption = $("favoriteChatsCaption");
+const relevantHistoryCaption = $("relevantHistoryCaption");
+const relevantHistoryList = $("relevantHistoryList");
+const pastHistoryCaption = $("pastHistoryCaption");
+const pastHistoryList = $("pastHistoryList");
 const newChatBtn = $("newChatBtn");
 const menuToggle = $("menuToggle");
 const sidebar = $("sidebar");
 const toast = $("toast");
 const topbarSub = $("topbarSub");
+const topbarReveal = $("topbarReveal");
 const connectLlmBtn = $("connectLlmBtn");
 const userBadge = $("userBadge");
 const logoutBtn = $("logoutBtn");
 const llmModalNote = $("llmModalNote");
-const suggestionGrid = document.querySelector(".suggestion-grid");
+const centerKpiBoard = $("centerKpiBoard");
 const metricExamplesEl = $("metricExamples");
 const topicSuggestionsEl = $("topicSuggestions");
 
 (async function init() {
   showToolCalls.checked = state.showToolCalls;
   wireUiEvents();
+  renderSidebarSectionState();
 
   await loadRuntimeConfig();
   await loadAuthConfig();
@@ -124,6 +175,9 @@ function wireUiEvents() {
     if (handleDynamicButtonClick(event)) {
       return;
     }
+    if (!event.target.closest(".topbar-chip") && !event.target.closest("#topbarReveal")) {
+      closeTopbarReveal();
+    }
     if (window.innerWidth <= 768 && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
       sidebar.classList.remove("open");
     }
@@ -137,27 +191,65 @@ function wireUiEvents() {
   });
 }
 
+function renderSidebarSectionState() {
+  document.querySelectorAll("[data-section-toggle]").forEach((button) => {
+    const sectionId = button.dataset.sectionToggle || "";
+    const collapsed = Boolean(state.sidebarSections?.[sectionId]);
+    const body = document.querySelector(`[data-section-body="${sectionId}"]`);
+    button.classList.toggle("collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    if (body) {
+      body.classList.toggle("collapsed", collapsed);
+    }
+  });
+}
+
+function toggleSidebarSection(sectionId) {
+  if (!sectionId) return;
+  state.sidebarSections = {
+    ...DEFAULT_SIDEBAR_SECTIONS,
+    ...state.sidebarSections,
+    [sectionId]: !state.sidebarSections?.[sectionId],
+  };
+  localStorage.setItem("hr_sidebar_sections", JSON.stringify(state.sidebarSections));
+  renderSidebarSectionState();
+}
+
 function handleDynamicButtonClick(event) {
+  const sectionToggle = event.target.closest("[data-section-toggle]");
+  if (sectionToggle) {
+    toggleSidebarSection(sectionToggle.dataset.sectionToggle || "");
+    return true;
+  }
+
   const promptButton = event.target.closest("[data-q]");
   if (promptButton) {
     const question = promptButton.dataset.q;
     if (!question) return true;
+    if (promptButton.closest("#topbarReveal")) {
+      closeTopbarReveal();
+    }
     chatInput.value = question;
     onInputChange();
     handleSend();
     return true;
   }
 
+  const topbarChip = event.target.closest(".topbar-chip");
+  if (topbarChip) {
+    toggleTopbarReveal(topbarChip.dataset.topbarPanel || "");
+    return true;
+  }
+
+  const diveTopicButton = event.target.closest(".sidebar-topic-chip");
+  if (diveTopicButton && favoriteTopicsEl?.contains(diveTopicButton)) {
+    toggleDiveTopic(diveTopicButton.dataset.topic || "");
+    return true;
+  }
+
   const topicButton = event.target.closest(".metric-chip");
   if (topicButton && metricExamplesEl?.contains(topicButton)) {
-    const topic = topicButton.dataset.topic || "";
-    state.activeTopic = topic;
-    metricExamplesEl.querySelectorAll(".metric-chip").forEach((chip) => {
-      const isActive = chip === topicButton;
-      chip.classList.toggle("active", isActive);
-      chip.setAttribute("aria-pressed", String(isActive));
-    });
-    renderTopicSuggestions(topic, state.accessProfile);
+    setActiveTopic(topicButton.dataset.topic || "");
     return true;
   }
 
@@ -425,6 +517,7 @@ async function loadStats() {
     }
 
     const stats = await response.json();
+    state.stats = stats;
     state.accessProfile = stats.access_profile || state.accessProfile;
     syncAuthUi();
     syncScopeUi();
@@ -434,12 +527,11 @@ async function loadStats() {
     dbStatus.className = "status-pill ok";
     dbStatus.textContent = "Connected";
     dbCaption.textContent = buildDbCaption(stats);
-    kpiStrip.innerHTML = buildKpiStrip(stats);
   } catch {
+    state.stats = null;
     dbStatus.className = "status-pill error";
     dbStatus.textContent = "DB unavailable";
     dbCaption.textContent = "Run: python setup_db.py";
-    kpiStrip.innerHTML = "";
   }
 }
 
@@ -525,9 +617,380 @@ function renderScopedPrompts() {
   }
 
   const uniquePrompts = prompts.slice(0, 5);
-  renderPromptButtons(examplesEl, "example-btn", uniquePrompts);
-  renderPromptButtons(suggestionGrid, "suggestion-card", uniquePrompts.slice(0, 4), true);
+  state.scopedPrompts = uniquePrompts;
+  renderDiveBackIn();
   renderMetricExamples(profile);
+}
+
+function preferredTopicsFromHistory() {
+  const favoriteTopics = Array.isArray(state.historySummary.favoriteTopics)
+    ? state.historySummary.favoriteTopics
+    : [];
+  const favoriteKpis = Array.isArray(state.historySummary.favoriteKpis)
+    ? state.historySummary.favoriteKpis
+    : [];
+  const combined = [...favoriteKpis, ...favoriteTopics];
+  const unique = [];
+  const seen = new Set();
+
+  combined.forEach((item) => {
+    const topic = String(item?.topic || "").trim();
+    if (!topic || seen.has(topic)) return;
+    seen.add(topic);
+    unique.push(topic);
+  });
+
+  if (unique.length) return unique.slice(0, 5);
+
+  const normalizedAllowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
+  if (normalizedAllowed.includes("all")) {
+    return ["Headcount", "Attrition rate", "Compensation bands", "Satisfaction pulse", "Tenure mix"];
+  }
+
+  return Array.from(new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []).map((metric) => {
+    const mapping = {
+      "headcount": "Headcount",
+      "attrition": "Attrition rate",
+      "compensation": "Compensation bands",
+      "performance": "Performance ratings",
+      "satisfaction": "Satisfaction pulse",
+      "tenure": "Tenure mix",
+      "demographics": "Demographic mix",
+      "policy": "Access policy guidance",
+    };
+    return mapping[metric] || "";
+  }).filter(Boolean))).slice(0, 5);
+}
+
+function preferredQuestionsFromHistory() {
+  return preferredQuestionItemsFromHistory().map((item) => item.question).slice(0, 5);
+}
+
+function preferredQuestionItemsFromHistory() {
+  const favoriteQuestions = Array.isArray(state.historySummary.favoriteQuestions)
+    ? state.historySummary.favoriteQuestions
+    : [];
+  const unique = [];
+  const seen = new Set();
+
+  favoriteQuestions.forEach((item) => {
+    const question = String(item?.question || "").trim();
+    const normalized = question.toLowerCase();
+    if (!question || seen.has(normalized)) return;
+    seen.add(normalized);
+    unique.push({
+      ...item,
+      question,
+      topics: Array.isArray(item?.topics) ? item.topics : [],
+    });
+  });
+
+  return unique.slice(0, 5);
+}
+
+function topicMetricKey(topic) {
+  const normalized = String(topic || "").trim().toLowerCase();
+  const mapping = {
+    "headcount": "headcount",
+    "active workforce": "headcount",
+    "department mix": "headcount",
+    "attrition rate": "attrition",
+    "attrited employee roster": "attrition",
+    "attrition by department": "attrition",
+    "tenure mix": "tenure",
+    "promotion momentum": "tenure",
+    "compensation bands": "compensation",
+    "performance ratings": "performance",
+    "satisfaction pulse": "satisfaction",
+    "demographic mix": "demographics",
+    "access policy guidance": "policy",
+  };
+  return mapping[normalized] || normalized;
+}
+
+function filterHistoryItemsByTopic(items, topic) {
+  const topicKey = topicMetricKey(topic);
+  return items.filter((item) => {
+    const itemTopics = Array.isArray(item?.topics) ? item.topics : [];
+    return itemTopics.some((label) => topicMetricKey(label) === topicKey);
+  });
+}
+
+function renderDiveBackIn() {
+  const topics = preferredTopicsFromHistory();
+  const favoriteQuestionItems = preferredQuestionItemsFromHistory();
+  const activeTopic = topics.includes(state.activeDiveTopic) ? state.activeDiveTopic : "";
+  state.activeDiveTopic = activeTopic;
+
+  if (favoriteTopicsEl) {
+    favoriteTopicsEl.innerHTML = topics.map((topic) => `
+      <button
+        type="button"
+        class="sidebar-topic-chip${activeTopic === topic ? " active" : ""}"
+        data-topic="${escAttr(topic)}"
+        title="Click to reveal questions around ${escAttr(topic)}"
+      >${escHtml(topic)}</button>
+    `).join("");
+  }
+
+  const filteredItems = activeTopic
+    ? filterHistoryItemsByTopic(favoriteQuestionItems, activeTopic)
+    : favoriteQuestionItems;
+  const questionItems = filteredItems.length ? filteredItems : favoriteQuestionItems;
+
+  if (favoriteChatsCaption) {
+    favoriteChatsCaption.textContent = activeTopic
+      ? `Favorite chats related to ${activeTopic}.`
+      : "Your highest-signal chats based on past usage and feedback.";
+  }
+
+  if (!questionItems.length) {
+    if (examplesEl) {
+      examplesEl.innerHTML = '<div class="history-empty">No favorite chats yet. Repeated or positively rated questions will show up here.</div>';
+    }
+  } else {
+    renderPromptButtons(
+      examplesEl,
+      "example-btn",
+      questionItems.slice(0, 5).map((item) => item.question),
+    );
+  }
+
+  renderCenterKpiBoard();
+}
+
+function hasHistoryKeyword(patterns) {
+  const questions = (Array.isArray(state.historySummary.favoriteQuestions) ? state.historySummary.favoriteQuestions : [])
+    .map((item) => String(item?.question || "").toLowerCase())
+    .filter(Boolean);
+  return questions.some((question) => patterns.some((pattern) => pattern.test(question)));
+}
+
+function preferredKpiFamilies() {
+  const favoriteTopics = preferredTopicsFromHistory().map((topic) => topic.toLowerCase());
+  const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
+  const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
+  const families = [];
+
+  const wantsHeadcount = favoriteTopics.some((topic) => topic.includes("headcount") || topic.includes("workforce"))
+    || hasHistoryKeyword([/\bheadcount\b/, /\bactive\b/, /\bworkforce\b/]);
+  const wantsAttrition = favoriteTopics.some((topic) => topic.includes("attrition"))
+    || hasHistoryKeyword([/\battrition\b/, /\battrited\b/, /\bleft\b/, /\brisk\b/]);
+  const wantsPromotion = favoriteTopics.some((topic) => topic.includes("tenure") || topic.includes("compensation"))
+    || hasHistoryKeyword([/\bpromotion\b/, /\bpromoted\b/, /\bsalary hike\b/, /\bhike\b/]);
+
+  if ((hasAllMetrics || allowed.has("headcount")) && wantsHeadcount) families.push("headcount");
+  if ((hasAllMetrics || allowed.has("attrition")) && wantsAttrition) families.push("attrition");
+  if ((hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance")) && wantsPromotion) {
+    families.push("promotion");
+  }
+
+  if (!families.includes("headcount") && (hasAllMetrics || allowed.has("headcount"))) families.push("headcount");
+  if (!families.includes("attrition") && (hasAllMetrics || allowed.has("attrition"))) families.push("attrition");
+  if (!families.includes("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
+    families.push("promotion");
+  }
+
+  return families.slice(0, 3);
+}
+
+function requestedKpiFamilies() {
+  const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
+  const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
+  const families = [];
+
+  const askedHeadcount = hasHistoryKeyword([/\bheadcount\b/, /\bactive\b/, /\bworkforce\b/, /\bhead count\b/]);
+  const askedAttrition = hasHistoryKeyword([/\battrition\b/, /\battrited\b/, /\bleft\b/, /\brisk\b/, /\bretention\b/]);
+  const askedPromotion = hasHistoryKeyword([/\bpromotion\b/, /\bpromoted\b/, /\bsalary hike\b/, /\bhike\b/, /\bpromotion pool\b/]);
+
+  if ((hasAllMetrics || allowed.has("headcount")) && askedHeadcount) families.push("headcount");
+  if ((hasAllMetrics || allowed.has("attrition")) && askedAttrition) families.push("attrition");
+  if ((hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance")) && askedPromotion) {
+    families.push("promotion");
+  }
+
+  return families;
+}
+
+function buildCenterKpiCards() {
+  if (!state.stats || !state.accessProfile) return [];
+
+  const scopeName = state.accessProfile.scope_name || "my scope";
+  const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
+  const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
+  const requestedFamilies = requestedKpiFamilies();
+  const families = [];
+  const cards = [];
+
+  if (hasAllMetrics || allowed.has("headcount")) {
+    families.push("headcount");
+  }
+  requestedFamilies.forEach((family) => {
+    if (!families.includes(family)) {
+      families.push(family);
+    }
+  });
+
+  if (families.includes("headcount")) {
+    cards.push({
+      family: "Headcount",
+      familyKey: "headcount",
+      label: "Current HC",
+      value: Number(state.stats.total_employees || 0).toLocaleString(),
+      note: "Pinned first for quick workforce context",
+      prompt: `What is the current headcount for ${scopeName}?`,
+    });
+  }
+
+  if (requestedFamilies.includes("headcount")) {
+    cards.push({
+      family: "Headcount",
+      familyKey: "headcount",
+      label: "Active employees",
+      value: Number(state.stats.active_employees || 0).toLocaleString(),
+      note: "Employees who have not attrited",
+      prompt: `How many active employees are in ${scopeName}?`,
+    });
+  }
+
+  if (families.includes("attrition")) {
+    cards.push({
+      family: "Attrition",
+      familyKey: "attrition",
+      label: "Attrition rate",
+      value: `${state.stats.attrition_rate_pct || 0}%`,
+      note: "Current scoped attrition level",
+      prompt: `What is the attrition rate for ${scopeName}?`,
+      tone: Number(state.stats.attrition_rate_pct || 0) > 15 ? "danger" : "",
+    });
+  }
+
+  const hasPromotionStats = [
+    state.stats.promoted_last_year_employees,
+    state.stats.avg_years_since_last_promotion,
+  ].some((value) => value !== undefined && value !== null);
+
+  if (families.includes("promotion") && hasPromotionStats) {
+    cards.push(
+      {
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "Promoted in last year",
+        value: Number(state.stats.promoted_last_year_employees || 0).toLocaleString(),
+        note: "Employees with less than one year since last promotion",
+        prompt: `How many employees in ${scopeName} were promoted in the last year?`,
+        tone: "success",
+      },
+      {
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "Avg years since promotion",
+        value: `${Number(state.stats.avg_years_since_last_promotion || 0).toFixed(1)} yrs`,
+        note: "Current average across the scoped workforce",
+        prompt: `What is the average time since last promotion in ${scopeName}?`,
+      },
+    );
+  }
+
+  return cards.slice(0, 6);
+}
+
+function buildCenterPromptCards(existingFamilies = []) {
+  const scopeName = state.accessProfile?.scope_name || "my scope";
+  const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
+  const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
+  const prompts = [];
+  const used = new Set(existingFamilies);
+
+  if (!used.has("headcount") && (hasAllMetrics || allowed.has("headcount"))) {
+    prompts.push({
+      family: "Prompt",
+      label: "Headcount view",
+      question: `What is the current headcount for ${scopeName}?`,
+      note: "Quick snapshot of current headcount and department mix",
+      cta: "Ask this question",
+      prompt: `What is the current headcount for ${scopeName}?`,
+    });
+  }
+  if (!used.has("attrition") && (hasAllMetrics || allowed.has("attrition"))) {
+    prompts.push({
+      family: "Prompt",
+      label: "Attrition view",
+      question: `Show attrition by department for ${scopeName}`,
+      note: "Best next step for attrition hotspots and department risk",
+      cta: "Ask this question",
+      prompt: `Show attrition by department for ${scopeName}`,
+    });
+  }
+  if (!used.has("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
+    prompts.push({
+      family: "Prompt",
+      label: "Promotion view",
+      question: `Show employees with recent promotions in ${scopeName}`,
+      note: "Use this to review promotions and salary-hike signals",
+      cta: "Ask this question",
+      prompt: `Show employees with recent promotions in ${scopeName}`,
+    });
+  }
+
+  const fallbackPrompts = [
+    {
+      label: "Suggested next question",
+      question: `Generate an active headcount report for ${scopeName}`,
+      note: "Open a roster-style workforce view for your current scope",
+    },
+    {
+      label: "Suggested next question",
+      question: `What is the attrition rate for ${scopeName}?`,
+      note: "Check the current attrition baseline for your scoped team",
+    },
+    {
+      label: "Suggested next question",
+      question: `What is the average time since last promotion in ${scopeName}?`,
+      note: "Review promotion timing across the scoped workforce",
+    },
+  ];
+
+  fallbackPrompts.forEach((item) => {
+    prompts.push({
+      family: "Prompt",
+      label: item.label,
+      question: item.question,
+      note: item.note,
+      cta: "Ask this question",
+      prompt: item.question,
+    });
+  });
+
+  return prompts;
+}
+
+function renderCenterKpiBoard() {
+  if (!centerKpiBoard) return;
+
+  const cards = buildCenterKpiCards();
+  const existingFamilies = cards.map((card) => card.familyKey || card.family.toLowerCase());
+  const promptCards = buildCenterPromptCards(existingFamilies);
+  const allCards = [...cards, ...promptCards].slice(0, 6);
+
+  if (!allCards.length) {
+    centerKpiBoard.innerHTML = "";
+    return;
+  }
+
+  centerKpiBoard.innerHTML = allCards.map((card) => `
+    <button type="button" class="empty-kpi-card${card.family === "Prompt" ? " prompt" : ""}" data-q="${escAttr(card.prompt)}">
+      <span class="empty-kpi-family">${escHtml(card.family)}</span>
+      <span class="empty-kpi-label">${escHtml(card.label)}</span>
+      ${card.family === "Prompt"
+        ? `<span class="empty-kpi-question">${escHtml(card.question || card.prompt)}</span>`
+        : `<span class="empty-kpi-value ${escAttr(card.tone || "")}">${escHtml(card.value)}</span>`}
+      <span class="empty-kpi-note">${escHtml(card.note)}</span>
+      ${card.family === "Prompt"
+        ? `<span class="empty-kpi-cta">${escHtml(card.cta || "Ask this question")}</span>`
+        : ""}
+    </button>
+  `).join("");
 }
 
 function renderMetricExamples(profile) {
@@ -549,6 +1012,7 @@ function renderMetricExamples(profile) {
   }
   if (hasAllMetrics || allowed.has("tenure")) {
     metrics.push("Tenure mix");
+    metrics.push("Promotion momentum");
   }
   if (hasAllMetrics || allowed.has("satisfaction")) {
     metrics.push("Satisfaction pulse");
@@ -570,6 +1034,31 @@ function renderMetricExamples(profile) {
       aria-pressed="false"
     >${escHtml(metric)}</button>
   `).join("");
+}
+
+function setActiveTopic(topic) {
+  state.activeTopic = topic;
+  metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => {
+    const isActive = chip.dataset.topic === topic;
+    chip.classList.toggle("active", isActive);
+    chip.setAttribute("aria-pressed", String(isActive));
+  });
+  renderTopicSuggestions(topic, state.accessProfile);
+}
+
+function toggleDiveTopic(topic) {
+  state.activeDiveTopic = state.activeDiveTopic === topic ? "" : topic;
+  renderDiveBackIn();
+  if (state.activeDiveTopic) {
+    setActiveTopic(state.activeDiveTopic);
+  } else {
+    state.activeTopic = "";
+    metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => {
+      chip.classList.remove("active");
+      chip.setAttribute("aria-pressed", "false");
+    });
+    clearTopicSuggestions();
+  }
 }
 
 function clearTopicSuggestions() {
@@ -622,14 +1111,14 @@ function buildTopicQuestions(topic, profile) {
     "department mix": [
       `What is the department mix for ${scopeName}?`,
       `Show department share of headcount for ${scopeName}`,
-      `Which departments are growing or shrinking in ${scopeName}?`,
+      `Which departments have the largest share of headcount in ${scopeName}?`,
       `Create a chart of the department mix for ${scopeName}`,
     ],
     "attrition rate": [
       `What is the attrition rate for ${scopeName}?`,
       `Show attrition rate by department for ${scopeName}`,
       `Which teams in ${scopeName} have the highest attrition risk?`,
-      `Visualize attrition rate trends for ${scopeName}`,
+      `Create a visualization of attrition by department for ${scopeName}`,
     ],
     "attrited employee roster": [
       `Generate an attrition report for ${scopeName}`,
@@ -649,6 +1138,12 @@ function buildTopicQuestions(topic, profile) {
       `Which teams in ${scopeName} have the shortest average tenure?`,
       `Visualize the tenure mix for ${scopeName}`,
     ],
+    "promotion momentum": [
+      `Show employees with recent promotions in ${scopeName}`,
+      `How many employees in ${scopeName} were promoted in the last year?`,
+      `Which departments in ${scopeName} have the longest time since promotion?`,
+      `Compare salary hikes and years since promotion for ${scopeName}`,
+    ],
     "satisfaction pulse": [
       `Are there satisfaction risks in ${scopeName}?`,
       `Show job satisfaction by department for ${scopeName}`,
@@ -660,6 +1155,18 @@ function buildTopicQuestions(topic, profile) {
       `Which departments in ${scopeName} skew toward higher compensation bands?`,
       `Visualize compensation bands for ${scopeName}`,
       `Compare compensation bands and attrition for ${scopeName}`,
+    ],
+    "performance ratings": [
+      `Show performance ratings for ${scopeName}`,
+      `Which teams in ${scopeName} have the strongest performance ratings?`,
+      `Visualize the performance rating mix for ${scopeName}`,
+      `Compare performance ratings and attrition for ${scopeName}`,
+    ],
+    "demographic mix": [
+      `What does the demographic mix look like in ${scopeName}?`,
+      `Show age and gender mix by department for ${scopeName}`,
+      `Which demographic groups are most represented in ${scopeName}?`,
+      `Visualize the demographic mix for ${scopeName}`,
     ],
     "access policy guidance": [
       "Which HR access policy applies to my role?",
@@ -747,16 +1254,164 @@ function updateConnectionButton() {
 }
 
 function updateTopbarSub() {
+  if (!topbarSub) return;
+
   const departments = state.accessProfile?.allowed_departments || [];
-  const scope = departments.length ? departments.join(", ") : "Enterprise";
+  const scopeSummary = departments.length ? `${departments.length} business unit${departments.length > 1 ? "s" : ""}` : "Enterprise";
   const role = state.accessProfile?.role || "Authorized user";
   const provider = providerLabel(state.provider);
-  const model = state.model || "model not selected";
-  topbarSub.textContent = `${role} | ${scope} | HR-only insights | ${provider} | ${model}`;
+  const model = state.model || "Model not selected";
+  const favoriteKpis = buildPersonalizedKpiPrompts().map((item) => item.topic);
+  const kpiSummary = favoriteKpis.length ? favoriteKpis.slice(0, 2).join(" | ") : "Recommended KPI views";
+  const chips = [
+    {
+      id: "role",
+      label: "Role",
+      value: truncate(role, 24),
+      hover: `${role}${state.user?.name ? ` | ${state.user.name}` : ""}`,
+    },
+    {
+      id: "scope",
+      label: "Scope",
+      value: truncate(scopeSummary, 24),
+      hover: departments.length ? departments.join(", ") : "Enterprise-wide access",
+    },
+    {
+      id: "guardrails",
+      label: "Guardrails",
+      value: "HR-only",
+      hover: "Role-aware HR insights with governed access controls",
+    },
+    {
+      id: "model",
+      label: "Model",
+      value: truncate(`${provider} | ${model}`, 28),
+      hover: `${provider} | ${model}`,
+    },
+    {
+      id: "kpis",
+      label: "My KPIs",
+      value: truncate(kpiSummary, 28),
+      hover: "History-aware KPI suggestions and starter questions",
+    },
+  ];
+
+  topbarSub.innerHTML = chips.map((chip) => `
+    <button
+      type="button"
+      class="topbar-chip${state.activeTopbarPanel === chip.id ? " active" : ""}"
+      data-topbar-panel="${chip.id}"
+      title="${escAttr(chip.hover)}"
+      aria-expanded="${state.activeTopbarPanel === chip.id ? "true" : "false"}"
+    >
+      <span class="topbar-chip-label">${escHtml(chip.label)}</span>
+      <span class="topbar-chip-value">${escHtml(chip.value)}</span>
+    </button>
+  `).join("");
+
+  renderTopbarReveal();
 }
 
 function providerLabel(provider) {
   return provider === "anthropic" ? "Anthropic" : "OpenAI-compatible";
+}
+
+function toggleTopbarReveal(panelId) {
+  state.activeTopbarPanel = state.activeTopbarPanel === panelId ? "" : panelId;
+  updateTopbarSub();
+}
+
+function closeTopbarReveal() {
+  if (!state.activeTopbarPanel) return;
+  state.activeTopbarPanel = "";
+  updateTopbarSub();
+}
+
+function buildPersonalizedKpiPrompts() {
+  const topics = Array.isArray(state.historySummary.favoriteKpis) && state.historySummary.favoriteKpis.length
+    ? state.historySummary.favoriteKpis.map((item) => String(item?.topic || "").trim()).filter(Boolean)
+    : preferredTopicsFromHistory().filter((topic) => topic !== "Access policy guidance");
+
+  const uniqueTopics = Array.from(new Set(topics)).slice(0, 4);
+  return uniqueTopics.map((topic) => ({
+    topic,
+    prompt: buildTopicQuestions(topic, state.accessProfile)[0] || "",
+  })).filter((item) => item.prompt);
+}
+
+function revealMetricSummary() {
+  const allowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
+  return allowed.includes("all") ? "All governed HR metrics" : (allowed.join(", ") || "Scoped metrics");
+}
+
+function renderTopbarReveal() {
+  if (!topbarReveal) return;
+  if (!state.activeTopbarPanel) {
+    topbarReveal.classList.add("hidden");
+    topbarReveal.innerHTML = "";
+    return;
+  }
+
+  const departments = state.accessProfile?.allowed_departments || [];
+  const favoriteKpis = buildPersonalizedKpiPrompts();
+  const favoriteQuestions = preferredQuestionsFromHistory().slice(0, 3);
+  let content = "";
+
+  if (state.activeTopbarPanel === "role") {
+    content = `
+      <div class="topbar-reveal-card">
+        <div class="topbar-reveal-kicker">Role Context</div>
+        <div class="topbar-reveal-title">${escHtml(state.accessProfile?.role || "Authorized user")}</div>
+        <div class="topbar-reveal-copy">Signed in as ${escHtml(state.user?.name || "your HR user")}. Your current view is limited to the metrics and document tags approved for this role.</div>
+      </div>
+    `;
+  } else if (state.activeTopbarPanel === "scope") {
+    content = `
+      <div class="topbar-reveal-card">
+        <div class="topbar-reveal-kicker">Scope</div>
+        <div class="topbar-reveal-title">${escHtml(state.accessProfile?.scope_name || "Enterprise")}</div>
+        <div class="topbar-reveal-copy">${departments.length ? escHtml(departments.join(", ")) : "Enterprise-wide access"}.</div>
+        <div class="topbar-reveal-note">Accessible metrics: ${escHtml(revealMetricSummary())}</div>
+      </div>
+    `;
+  } else if (state.activeTopbarPanel === "guardrails") {
+    content = `
+      <div class="topbar-reveal-card">
+        <div class="topbar-reveal-kicker">Guardrails</div>
+        <div class="topbar-reveal-title">HR-only, role-approved analysis</div>
+        <div class="topbar-reveal-copy">The assistant stays inside HR topics, applies your role scope before analysis, and only surfaces data domains you are allowed to access.</div>
+        <div class="topbar-reveal-note">Current access: ${escHtml(revealMetricSummary())}</div>
+      </div>
+    `;
+  } else if (state.activeTopbarPanel === "model") {
+    content = `
+      <div class="topbar-reveal-card">
+        <div class="topbar-reveal-kicker">Model Setup</div>
+        <div class="topbar-reveal-title">${escHtml(providerLabel(state.provider))}</div>
+        <div class="topbar-reveal-copy">${escHtml(state.model || "No model selected yet")}</div>
+        <div class="topbar-reveal-note">Use the Connect LLM button to switch provider, model, base URL, or API key.</div>
+      </div>
+    `;
+  } else if (state.activeTopbarPanel === "kpis") {
+    content = `
+      <div class="topbar-reveal-card">
+        <div class="topbar-reveal-kicker">Most Relevant To You</div>
+        <div class="topbar-reveal-title">KPIs shaped by your recent history</div>
+        <div class="topbar-reveal-copy">These prompts lean into the KPI themes you revisit most often.</div>
+        <div class="topbar-reveal-pills">
+          ${favoriteKpis.map((item) => `<button type="button" class="topbar-reveal-pill" data-q="${escAttr(item.prompt)}">${escHtml(item.topic)}</button>`).join("")}
+        </div>
+        ${favoriteQuestions.length ? `
+          <div class="topbar-reveal-list">
+            ${favoriteQuestions.map((question) => `<button type="button" class="topbar-reveal-item" data-q="${escAttr(question)}">${escHtml(question)}</button>`).join("")}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  topbarReveal.innerHTML = content;
+  topbarReveal.classList.remove("hidden");
 }
 
 function onInputChange() {
@@ -1302,16 +1957,143 @@ function buildMarkdownBubble(text, memoryId = null, feedbackScore = 0) {
   const wrapper = document.createElement("div");
   wrapper.className = "assistant-response";
 
+  const meta = document.createElement("div");
+  meta.className = "assistant-response-meta";
+  meta.innerHTML = `
+    <div class="assistant-response-badge">HR Analyst</div>
+    <div class="assistant-response-actions">
+      <button type="button" class="assistant-action-btn">Copy</button>
+    </div>
+  `;
+  wrapper.appendChild(meta);
+
   const bubble = document.createElement("div");
   bubble.className = "bubble-ai";
-  bubble.innerHTML = markdownToHtml(text);
+  bubble.innerHTML = markdownToHtml(normalizeMarkdownResponse(text));
   wrapper.appendChild(bubble);
+  wireAssistantResponseActions(wrapper, text);
 
   if (memoryId) {
     wrapper.appendChild(buildFeedbackBar(memoryId, feedbackScore));
   }
 
   return wrapper;
+}
+
+function normalizeMarkdownResponse(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const normalizedLines = [];
+  let inCodeBlock = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      normalizedLines.push(rawLine);
+      continue;
+    }
+
+    if (inCodeBlock || !trimmed) {
+      normalizedLines.push(rawLine);
+      continue;
+    }
+
+    let nextNonEmptyLine = "";
+    for (let lookahead = index + 1; lookahead < lines.length; lookahead += 1) {
+      const candidate = lines[lookahead].trim();
+      if (!candidate) continue;
+      nextNonEmptyLine = candidate;
+      break;
+    }
+
+    if (looksLikeStandaloneSectionHeading(trimmed, nextNonEmptyLine)) {
+      normalizedLines.push(`### ${trimmed.replace(/:$/, "")}`);
+      continue;
+    }
+
+    normalizedLines.push(rawLine);
+  }
+
+  return normalizedLines.join("\n");
+}
+
+function looksLikeStandaloneSectionHeading(line, nextNonEmptyLine = "") {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) return false;
+  if (/^(#{1,6}|>|\||[-*+]\s|\d+[\.\)])/.test(trimmed)) return false;
+  if (trimmed.endsWith(".") || trimmed.endsWith("?") || trimmed.endsWith("!")) return false;
+
+  const cleaned = trimmed.replace(/:$/, "");
+  const normalized = cleaned.toLowerCase();
+  if (SECTION_HEADING_HINTS.has(normalized)) return true;
+
+  if (cleaned.length > 40 || cleaned.split(/\s+/).length > 5) return false;
+
+  const nextTrimmed = String(nextNonEmptyLine || "").trim();
+  const nextLooksStructured = /^[-*+]\s/.test(nextTrimmed) || /^\d+[\.\)]\s/.test(nextTrimmed);
+  const looksTitleLike = cleaned.split(/\s+/).every((word) => /^[A-Z][A-Za-z0-9&/()+-]*$/.test(word));
+  return nextLooksStructured && looksTitleLike;
+}
+
+function wireAssistantResponseActions(wrapper, sourceText) {
+  const responseCopyButton = wrapper.querySelector(".assistant-action-btn");
+  if (responseCopyButton) {
+    responseCopyButton.addEventListener("click", async () => {
+      const copied = await copyTextToClipboard(sourceText, "Response copied.");
+      if (copied) flashButtonLabel(responseCopyButton, "Copied");
+    });
+  }
+
+  wrapper.querySelectorAll(".md-code-copy-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const code = button.closest(".md-code-block")?.querySelector("code")?.textContent || "";
+      const copied = await copyTextToClipboard(code, "Code copied.");
+      if (copied) flashButtonLabel(button, "Copied");
+    });
+  });
+}
+
+function flashButtonLabel(button, label) {
+  if (!button) return;
+  const originalLabel = button.dataset.originalLabel || button.textContent;
+  button.dataset.originalLabel = originalLabel;
+  button.textContent = label;
+  window.clearTimeout(Number(button.dataset.resetTimer || 0));
+  const timerId = window.setTimeout(() => {
+    button.textContent = originalLabel;
+  }, 1400);
+  button.dataset.resetTimer = String(timerId);
+}
+
+async function copyTextToClipboard(text, successMessage = "Copied to clipboard.") {
+  const value = String(text || "").trimEnd();
+  if (!value) {
+    showToast("Nothing to copy.", true);
+    return false;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const fallback = document.createElement("textarea");
+      fallback.value = value;
+      fallback.setAttribute("readonly", "readonly");
+      fallback.style.position = "fixed";
+      fallback.style.opacity = "0";
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand("copy");
+      fallback.remove();
+    }
+    showToast(successMessage);
+    return true;
+  } catch (error) {
+    showToast(error.message || "Could not copy to clipboard.", true);
+    return false;
+  }
 }
 
 function buildFeedbackBar(memoryId, feedbackScore = 0) {
@@ -1358,20 +2140,51 @@ function markdownToHtml(markdown) {
   const html = [];
   let inCodeBlock = false;
   let codeFence = [];
+  let codeFenceLanguage = "";
   let listType = null;
   let paragraph = [];
   let tableLines = [];
+  let quoteLines = [];
+  let metricSummaryLines = [];
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
-    html.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+    html.push(`<p>${renderInline(paragraph.join("\n"))}</p>`);
     paragraph = [];
+  };
+
+  const flushMetricSummary = () => {
+    if (!metricSummaryLines.length) return;
+    if (metricSummaryLines.length >= 2) {
+      html.push(renderMetricSummary(metricSummaryLines));
+    } else {
+      paragraph.push(`${metricSummaryLines[0].label}: ${metricSummaryLines[0].value}`);
+    }
+    metricSummaryLines = [];
   };
 
   const closeList = () => {
     if (!listType) return;
     html.push(`</${listType}>`);
     listType = null;
+  };
+
+  const flushQuote = () => {
+    if (!quoteLines.length) return;
+    html.push(
+      `<blockquote>${quoteLines.map((line) => `<p>${renderInline(line)}</p>`).join("")}</blockquote>`,
+    );
+    quoteLines = [];
+  };
+
+  const appendToLastListItem = (content) => {
+    for (let index = html.length - 1; index >= 0; index -= 1) {
+      if (typeof html[index] === "string" && html[index].startsWith("<li>")) {
+        html[index] = html[index].replace(/<\/li>$/, `<br />${renderInline(content)}</li>`);
+        return true;
+      }
+    }
+    return false;
   };
 
   const flushTable = () => {
@@ -1390,14 +2203,18 @@ function markdownToHtml(markdown) {
     const trimmed = line.trim();
 
     if (trimmed.startsWith("```")) {
+      flushQuote();
       flushTable();
+      flushMetricSummary();
       flushParagraph();
       closeList();
       if (inCodeBlock) {
-        html.push(`<pre><code>${escHtml(codeFence.join("\n"))}</code></pre>`);
+        html.push(renderCodeBlock(codeFence.join("\n"), codeFenceLanguage));
         codeFence = [];
+        codeFenceLanguage = "";
         inCodeBlock = false;
       } else {
+        codeFenceLanguage = trimmed.slice(3).trim();
         inCodeBlock = true;
       }
       continue;
@@ -1409,13 +2226,28 @@ function markdownToHtml(markdown) {
     }
 
     if (!trimmed) {
+      flushQuote();
       flushTable();
+      flushMetricSummary();
       flushParagraph();
       closeList();
       continue;
     }
 
+    const quoteMatch = trimmed.match(/^>\s?(.*)$/);
+    if (quoteMatch) {
+      flushTable();
+      flushMetricSummary();
+      flushParagraph();
+      closeList();
+      quoteLines.push(quoteMatch[1]);
+      continue;
+    }
+
+    flushQuote();
+
     if (isPipeTableLine(trimmed)) {
+      flushMetricSummary();
       flushParagraph();
       closeList();
       tableLines.push(trimmed);
@@ -1423,6 +2255,23 @@ function markdownToHtml(markdown) {
     }
 
     flushTable();
+
+    const metricSummaryLine = parseMetricSummaryLine(trimmed);
+    if (metricSummaryLine) {
+      flushParagraph();
+      closeList();
+      metricSummaryLines.push(metricSummaryLine);
+      continue;
+    }
+
+    flushMetricSummary();
+
+    if (isSectionLabelLine(trimmed)) {
+      flushParagraph();
+      closeList();
+      html.push(`<h3>${renderInline(trimmed.replace(/:$/, ""))}</h3>`);
+      continue;
+    }
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
@@ -1434,14 +2283,20 @@ function markdownToHtml(markdown) {
     }
 
     if (/^([-*_])(?:\s*\1){2,}\s*$/.test(trimmed)) {
+      flushMetricSummary();
       flushParagraph();
       closeList();
       html.push("<hr />");
       continue;
     }
 
-    const bulletMatch = trimmed.match(/^[-*]\s+(.*)$/);
+    if (listType && /^[ \t]{2,}\S/.test(rawLine) && appendToLastListItem(trimmed)) {
+      continue;
+    }
+
+    const bulletMatch = trimmed.match(/^(?:[-*+]|\u2022)\s+(.*)$/);
     if (bulletMatch) {
+      flushMetricSummary();
       flushParagraph();
       if (listType !== "ul") {
         closeList();
@@ -1452,8 +2307,9 @@ function markdownToHtml(markdown) {
       continue;
     }
 
-    const orderedMatch = trimmed.match(/^\d+\.\s+(.*)$/);
+    const orderedMatch = trimmed.match(/^\d+[\.\)]\s+(.*)$/);
     if (orderedMatch) {
+      flushMetricSummary();
       flushParagraph();
       if (listType !== "ol") {
         closeList();
@@ -1464,26 +2320,112 @@ function markdownToHtml(markdown) {
       continue;
     }
 
+    flushMetricSummary();
     closeList();
     paragraph.push(trimmed);
   }
 
+  flushQuote();
   flushTable();
+  flushMetricSummary();
   flushParagraph();
   closeList();
 
   if (inCodeBlock) {
-    html.push(`<pre><code>${escHtml(codeFence.join("\n"))}</code></pre>`);
+    html.push(renderCodeBlock(codeFence.join("\n"), codeFenceLanguage));
   }
 
   return html.join("");
 }
 
+function parseMetricSummaryLine(line) {
+  const match = String(line || "").trim().match(/^([A-Za-z][A-Za-z0-9&/%()+\-\s]{1,34}):\s+(.+)$/);
+  if (!match) return null;
+
+  const label = match[1].trim();
+  const value = match[2].trim();
+  if (!label || !value) return null;
+  if (label.split(/\s+/).length > 4) return null;
+  if (!/[\d%]/.test(value) && value.length > 36) return null;
+
+  return { label, value };
+}
+
+function renderCodeBlock(code, language = "") {
+  const languageLabel = language || "text";
+  return `
+    <div class="md-code-block">
+      <div class="md-code-block-header">
+        <span class="md-code-block-label">${escHtml(languageLabel)}</span>
+        <button type="button" class="md-code-copy-btn">Copy</button>
+      </div>
+      <pre><code>${escHtml(code)}</code></pre>
+    </div>
+  `;
+}
+
+function renderMetricSummary(items) {
+  return `
+    <dl class="metric-summary">
+      ${items.map((item) => `
+        <div class="metric-summary-row">
+          <dt>${escHtml(item.label)}</dt>
+          <dd>${renderInline(item.value)}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
+}
+
+function sanitizeHref(value) {
+  const href = String(value || "").trim();
+  if (!href) return "";
+  if (/^(https?:|mailto:)/i.test(href)) return href;
+  if (href.startsWith("/") || href.startsWith("#")) return href;
+  return "";
+}
+
 function renderInline(text) {
-  let rendered = escHtml(text);
-  rendered = rendered.replace(/`([^`]+)`/g, "<code>$1</code>");
+  let rendered = String(text || "");
+  const codeTokens = [];
+  const linkTokens = [];
+
+  rendered = rendered.replace(/`([^`]+)`/g, (_, code) => {
+    const token = `@@CODE${codeTokens.length}@@`;
+    codeTokens.push(`<code>${escHtml(code)}</code>`);
+    return token;
+  });
+
+  rendered = rendered.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) => {
+    const safeHref = sanitizeHref(href);
+    if (!safeHref) return label;
+    const token = `@@LINK${linkTokens.length}@@`;
+    linkTokens.push(
+      `<a href="${escAttr(safeHref)}" target="_blank" rel="noopener noreferrer">${escHtml(label)}</a>`,
+    );
+    return token;
+  });
+
+  rendered = escHtml(rendered);
   rendered = rendered.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  rendered = rendered.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  rendered = rendered.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  rendered = rendered.replace(/\n/g, "<br />");
+
+  codeTokens.forEach((token, index) => {
+    rendered = rendered.replace(`@@CODE${index}@@`, token);
+  });
+  linkTokens.forEach((token, index) => {
+    rendered = rendered.replace(`@@LINK${index}@@`, token);
+  });
+
   return rendered;
+}
+
+function isSectionLabelLine(line) {
+  const normalized = String(line || "").trim().replace(/:$/, "").toLowerCase();
+  return SECTION_HEADING_HINTS.has(normalized)
+    || /^(takeaways|notes|actions?)$/.test(normalized);
 }
 
 function isPipeTableLine(line) {
@@ -1585,63 +2527,201 @@ function resetConversationUi() {
   state.pendingTableContext = null;
   state.feedbackByMemory = {};
   state.activeTopic = "";
+  state.activeDiveTopic = "";
+  state.activeTopbarPanel = "";
   metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => chip.classList.remove("active"));
   clearTopicSuggestions();
+  closeTopbarReveal();
   const thread = messagesEl.querySelector(".msg-thread");
   if (thread) thread.remove();
   if (emptyState) emptyState.style.display = "";
+  renderDiveBackIn();
 }
 
 function handleUnauthorized() {
   state.user = null;
   state.accessProfile = null;
+  state.stats = null;
   state.lastTable = null;
   state.pendingTableContext = null;
   state.feedbackByMemory = {};
   state.activeTopic = "";
+  state.activeDiveTopic = "";
+  state.activeTopbarPanel = "";
+  state.historySummary = { favoriteTopics: [], favoriteKpis: [], favoriteQuestions: [] };
   clearTopicSuggestions();
   syncAuthUi();
   syncScopeUi();
+  updateTopbarSub();
   showAuthShell();
 }
 
+function renderHistoryState(container, message) {
+  if (container) {
+    container.innerHTML = `<div class="history-empty">${escHtml(message)}</div>`;
+  }
+}
+
+function renderHistoryItems(container, questions) {
+  if (!container) return;
+  container.innerHTML = questions.map((item) => `
+    <button class="history-item" data-q="${escAttr(item.question)}" title="${escAttr(item.question)}">
+      <span class="history-question">${escHtml(item.question)}</span>
+      <span class="history-time">${escHtml(formatHistoryTime(item.created_at))}${Array.isArray(item.topics) && item.topics.length ? ` | ${escHtml(item.topics.join(", "))}` : ""}</span>
+    </button>
+  `).join("");
+}
+
+function dedupeHistoryItems(items, limit = 8) {
+  const unique = [];
+  const seen = new Set();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const question = String(item?.question || "").trim();
+    const normalized = question.toLowerCase();
+    if (!question || seen.has(normalized)) return;
+    seen.add(normalized);
+    unique.push({
+      ...item,
+      question,
+      topics: Array.isArray(item?.topics) ? item.topics : [],
+    });
+  });
+
+  return unique.slice(0, limit);
+}
+
+function buildRelevantHistoryQuery() {
+  const role = state.accessProfile?.role || "";
+  const scope = state.accessProfile?.scope_name || "";
+  const favoriteTerms = [
+    ...(Array.isArray(state.historySummary.favoriteKpis) ? state.historySummary.favoriteKpis : []),
+    ...(Array.isArray(state.historySummary.favoriteTopics) ? state.historySummary.favoriteTopics : []),
+  ]
+    .map((item) => String(item?.topic || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const allowedTerms = normalizeMetrics(state.accessProfile?.allowed_metrics || [])
+    .filter((metric) => metric && metric !== "all")
+    .slice(0, 3);
+
+  return Array.from(new Set([role, scope, ...favoriteTerms, ...allowedTerms].filter(Boolean))).join(" ");
+}
+
+function buildRelevantChatItems(personalizedItems = [], pastItems = []) {
+  const favorites = new Set(preferredQuestionsFromHistory().map((question) => question.toLowerCase()));
+  const preferredKeys = new Set(preferredTopicsFromHistory().map((topic) => topicMetricKey(topic)).filter(Boolean));
+  const mergedItems = dedupeHistoryItems([...personalizedItems, ...pastItems], 20)
+    .filter((item) => !favorites.has(item.question.toLowerCase()));
+
+  const scoredItems = mergedItems.map((item) => {
+    const topicKeys = (Array.isArray(item.topics) ? item.topics : []).map((topic) => topicMetricKey(topic));
+    let score = 0;
+
+    topicKeys.forEach((key) => {
+      if (preferredKeys.has(key)) score += 4;
+    });
+    score += Math.max(Number(item.feedback_score || 0), 0) * 2;
+    score += topicKeys.length * 0.25;
+
+    return { item, score };
+  });
+
+  scoredItems.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(b.item?.created_at || "").localeCompare(String(a.item?.created_at || ""));
+  });
+
+  const relevantItems = scoredItems
+    .filter((entry) => entry.score > 0)
+    .map((entry) => entry.item)
+    .slice(0, 6);
+
+  return relevantItems.length ? relevantItems : mergedItems.slice(0, 6);
+}
+
+function renderRelevantHistory(questions) {
+  if (relevantHistoryCaption) {
+    relevantHistoryCaption.textContent = "Role-aware chats based on the question types you ask most often.";
+  }
+  if (!relevantHistoryList) return;
+  if (!questions.length) {
+    renderHistoryState(relevantHistoryList, "No role-aware relevant chats yet. Ask a few more scoped questions and this list will sharpen.");
+    return;
+  }
+  renderHistoryItems(relevantHistoryList, questions);
+}
+
+function renderPastHistory(questions) {
+  if (pastHistoryCaption) {
+    pastHistoryCaption.textContent = "Questions asked across your prior sessions.";
+  }
+  if (!pastHistoryList) return;
+  if (!questions.length) {
+    renderHistoryState(pastHistoryList, "No prior HR questions yet.");
+    return;
+  }
+  renderHistoryItems(pastHistoryList, questions);
+}
+
+async function fetchHistoryPayload(query = "", limit = 8) {
+  const params = new URLSearchParams();
+  if (query) params.set("query", query);
+  if (limit) params.set("limit", String(limit));
+  const url = `/api/me/history${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    if (response.status === 401) {
+      handleUnauthorized();
+      return null;
+    }
+    throw new Error("Could not load history");
+  }
+  return response.json();
+}
+
 async function loadHistory() {
-  if (!historyList) return;
+  if (!relevantHistoryList && !pastHistoryList) return;
+  const requestToken = ++state.historyRequestToken;
 
   try {
-    const response = await fetch("/api/me/history");
-    if (!response.ok) {
-      if (response.status === 401) {
-        handleUnauthorized();
-        return;
-      }
+    const recentPayload = await fetchHistoryPayload("", 12);
+    if (requestToken !== state.historyRequestToken) return;
+    if (!recentPayload) {
       throw new Error("Could not load history");
     }
 
-    const payload = await response.json();
-    const questions = payload.questions || [];
+    state.historySummary = {
+      favoriteTopics: recentPayload.favorite_topics || [],
+      favoriteKpis: recentPayload.favorite_kpis || [],
+      favoriteQuestions: recentPayload.favorite_questions || [],
+    };
 
-    if (!questions.length) {
-      historyList.innerHTML = '<div class="history-empty">No prior HR questions yet</div>';
-      return;
+    const relevantQuery = buildRelevantHistoryQuery();
+    let relevantPayload = null;
+    if (relevantQuery) {
+      try {
+        relevantPayload = await fetchHistoryPayload(relevantQuery, 10);
+      } catch {
+        relevantPayload = null;
+      }
     }
+    if (requestToken !== state.historyRequestToken) return;
 
-    historyList.innerHTML = questions.map((item) => `
-      <button class="history-item" data-q="${escAttr(item.question)}">
-        <span class="history-question">${escHtml(item.question)}</span>
-        <span class="history-time">${escHtml(formatHistoryTime(item.created_at))}</span>
-      </button>
-    `).join("");
+    const pastQuestions = dedupeHistoryItems(recentPayload.questions || [], 12);
+    const relevantQuestions = buildRelevantChatItems(
+      dedupeHistoryItems(relevantPayload?.questions || [], 10),
+      pastQuestions,
+    );
 
-    historyList.querySelectorAll(".history-item").forEach((button) => {
-      button.addEventListener("click", () => {
-        chatInput.value = button.dataset.q || "";
-        onInputChange();
-        handleSend();
-      });
-    });
+    renderDiveBackIn();
+    updateTopbarSub();
+    renderRelevantHistory(relevantQuestions);
+    renderPastHistory(pastQuestions);
   } catch (error) {
-    historyList.innerHTML = `<div class="history-empty">${escHtml(error.message || "Could not load history")}</div>`;
+    if (requestToken !== state.historyRequestToken) return;
+    renderHistoryState(relevantHistoryList, error.message || "Could not load history");
+    renderHistoryState(pastHistoryList, error.message || "Could not load history");
   }
 }
 

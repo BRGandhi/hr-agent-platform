@@ -5,12 +5,63 @@ Anthropic consumes these directly; OpenAI-compatible adapters convert them.
 
 TOOLS = [
     {
+        "name": "search_past_chats",
+        "description": (
+            "Search the signed-in user's prior HR chats. "
+            "Use this when the user refers to earlier conversations, asks to dive back into a previous topic, "
+            "or when you need a targeted past answer or question pattern beyond the compact recent-memory briefing. "
+            "Keep retrieval narrow and request only a few highly relevant items."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Targeted search query describing the exact past-chat context needed",
+                },
+                "max_items": {
+                    "type": "integer",
+                    "description": "Maximum chat items to return. Keep this small, usually 1 to 4.",
+                },
+                "only_helpful": {
+                    "type": "boolean",
+                    "description": "If true, return only previously helpful/upvoted past chats",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_context_documents",
+        "description": (
+            "Search approved HR context documents such as policy, access rules, metric definitions, and schema summaries. "
+            "Use this when you need governed background context instead of structured workforce data. "
+            "Keep retrieval narrow and request only a few highly relevant snippets."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Targeted search query describing the exact document context needed",
+                },
+                "max_items": {
+                    "type": "integer",
+                    "description": "Maximum documents to return. Keep this small, usually 1 to 4.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "query_hr_database",
         "description": (
-            "Run a read-only SQL SELECT query against the HR employees database. "
+            "Run a read-only SQL SELECT query against the HR workforce database. "
             "Use this for ANY question involving employee counts, headcount, demographics, "
             "attrition rates, salaries, job roles, departments, satisfaction scores, "
             "tenure, promotions, performance ratings, or any other structured HR data. "
+            "Use `employees_current` or `employees` for current snapshot analysis. "
+            "Do not invent historical or month-over-month trends because this dataset is a single snapshot. "
             "Always use SELECT statements only. The full database schema is in your system prompt."
         ),
         "input_schema": {
@@ -18,7 +69,7 @@ TOOLS = [
             "properties": {
                 "sql_query": {
                     "type": "string",
-                    "description": "A SQL SELECT query to run against the employees table",
+                    "description": "A SQL SELECT query to run against the HR tables/views",
                 },
                 "explanation": {
                     "type": "string",

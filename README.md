@@ -64,6 +64,24 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - Similar-question matches can show previously helpful answers before the agent generates a fresh response.
 - Assistant responses include `Yes` / `No` helpfulness controls so teams can curate strong examples over time.
 
+### 9. Personalized home screen and sidebar
+- The landing experience now leads with what the platform can do: generate reports, visualizations, and scoped HR insights.
+- The center KPI board prioritizes headcount first, then surfaces KPI families the user has actually asked about before.
+- Prompt cards are phrased as concrete questions so the primary CTA is obvious instead of generic `Ask` / `Explore` labels.
+- The sidebar is organized around `Favorite Chats`, `Relevant Chats`, and `Past Chats`, with collapsible sections for faster navigation.
+- Relevant chat suggestions are informed by role, scope, and prior HR question patterns rather than just raw recency.
+
+### 10. Better in-chat continuity
+- Short follow-up replies such as `yes`, `job level`, `show me`, or `break it down` now inherit the current session context instead of being treated as brand-new standalone prompts.
+- The agent carries the latest table context forward so follow-up charting and breakdown requests stay grounded in the last result.
+- Conversation history is still bounded by `MAX_CONVERSATION_HISTORY`, but within that window the platform is much better at staying on the same HR thread.
+
+### 11. More polished response UX
+- Assistant answers render in a more mature chat surface with improved typography, spacing, section hierarchy, and cleaner Markdown treatment.
+- Plain-text `Label: Value` output can now be upgraded into compact metric-summary blocks for easier scanning.
+- Code blocks include headers and copy buttons, and assistant responses include a top-level copy action.
+- Tables, quotes, charts, and tool output cards are styled to feel like one consistent product surface rather than separate widgets.
+
 ## New Agent Features
 
 The newest generation of the agent is optimized around governed follow-up work instead of one-off answers.
@@ -75,6 +93,9 @@ The newest generation of the agent is optimized around governed follow-up work i
 - Visualization gating: `Visual options` is now reserved for smaller aggregate tables that are actually chartable.
 - Report export flow: standard employee-level reports now favor `Download Excel` instead of a chart CTA.
 - Inline feedback loop: each assistant answer supports `Yes` / `No` helpfulness feedback for future curation.
+- Personalized navigation: the sidebar now separates favorite, relevant, and past chats so users can return to strong prior work faster.
+- Session-aware follow-ups: short replies now inherit the active HR question context before access validation runs.
+- Response quality upgrades: the browser renderer promotes section headings, preserves rich Markdown better, and presents metric summaries more cleanly.
 
 ## Architecture At A Glance
 
@@ -274,7 +295,7 @@ Recommended practice for future updates:
 | `SECURE_COOKIES` | `false` | Set auth cookies as HTTPS-only; enable in production |
 | `SSO_PROVIDERS` | `Microsoft,Google,Okta` | Providers shown on the login shell |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed browser origins |
-| `RATE_LIMIT_MAX_REQUESTS` | `20` | Chat requests allowed per IP in the rate-limit window |
+| `RATE_LIMIT_MAX_REQUESTS` | `40` | Chat requests allowed per IP in the rate-limit window |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of the rate-limit window |
 | `LLM_TIMEOUT_SECONDS` | `60` | Upstream LLM request timeout |
 | `MAX_CONVERSATION_HISTORY` | `40` | Sliding window size for agent conversation history |

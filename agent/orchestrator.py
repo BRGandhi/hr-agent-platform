@@ -13,7 +13,7 @@ from agent.prompts import build_system_prompt
 from agent.tool_executor import ToolExecutor
 from agent.tools import TOOLS
 from config import MAX_AGENT_ITERATIONS, MAX_CONVERSATION_HISTORY
-from database.access_control import AccessProfile
+from database.access_control import AccessProfile, HR_SCOPE_KEYWORDS
 from database.connector import HRDatabase
 from database.context_store import ContextStore
 
@@ -22,17 +22,58 @@ logger = logging.getLogger("hr_platform.agent")
 # Display constants
 MAX_TABLE_ROWS = 50
 MAX_RESULT_CHARS = 2000
-MAX_RELATED_MEMORY = 6
-MAX_HELPFUL_MEMORY = 3
+MAX_RECENT_MEMORY = 2
+MAX_RELATED_MEMORY = 3
+MAX_HELPFUL_MEMORY = 2
+MAX_CONTEXT_DOCUMENTS = 2
 VISUAL_FOLLOW_UP_KEYWORDS = ("visual", "visualize", "visualization", "chart", "graph", "plot", "dashboard")
 PRIOR_RESULT_REFERENCES = ("this", "that", "it", "above", "previous", "latest", "table", "result")
+HISTORY_LOOKUP_KEYWORDS = ("before", "earlier", "again", "last time", "previous", "prior", "past chat", "dive back")
+DOCUMENT_LOOKUP_KEYWORDS = ("policy", "policies", "access", "rule", "rules", "definition", "schema", "tag", "document")
+GENERIC_FOLLOW_UP_REPLIES = {
+    "yes",
+    "yes please",
+    "yeah",
+    "yep",
+    "sure",
+    "sure thing",
+    "ok",
+    "okay",
+    "please",
+    "go ahead",
+    "do it",
+    "sounds good",
+    "no",
+    "no thanks",
+    "not now",
+}
+CONTEXTUAL_REPLY_PHRASES = (
+    "show me",
+    "show that",
+    "show it",
+    "show those",
+    "break it down",
+    "drill down",
+    "go deeper",
+    "dig deeper",
+    "more detail",
+    "more details",
+    "visualize it",
+    "chart it",
+    "plot it",
+    "turn it into",
+    "same for",
+    "that one",
+    "those ones",
+)
+FOLLOW_UP_REFERENCE_WORDS = {"this", "that", "it", "those", "them", "same"}
 
 
 class HRAgent:
     def __init__(self, llm_config: LLMConfig, db: HRDatabase, context_store: ContextStore):
         self.llm_config = llm_config.normalized()
         self.client = create_llm_client(self.llm_config)
-        self.executor = ToolExecutor(db)
+        self.executor = ToolExecutor(db, context_store=context_store)
         self.context_store = context_store
         self.conversation_history: list[dict] = []
         self.last_table_context: dict | None = None
@@ -52,6 +93,36 @@ class HRAgent:
         if len(self.conversation_history) > MAX_CONVERSATION_HISTORY:
             self.conversation_history = self.conversation_history[-MAX_CONVERSATION_HISTORY:]
 
+    def _normalized_message(self, text: str) -> str:
+        return " ".join((text or "").strip().lower().split())
+
+    def _latest_message_content(self, role: str) -> str:
+        for item in reversed(self.conversation_history):
+            if item.get("role") != role:
+                continue
+            content = str(item.get("content") or "").strip()
+            if content:
+                return content
+        return ""
+
+    def _latest_user_context_anchor(self) -> str:
+        fallback = ""
+        for item in reversed(self.conversation_history):
+            if item.get("role") != "user":
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            if not fallback:
+                fallback = content
+
+            normalized = self._normalized_message(content)
+            if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
+                return content
+            if len(normalized.split()) > 4 or "?" in content:
+                return content
+        return fallback
+
     def _dedupe_memories(self, memories: list[dict]) -> list[dict]:
         deduped: list[dict] = []
         seen_ids: set[int] = set()
@@ -68,7 +139,7 @@ class HRAgent:
         if not table_context or not table_context.get("rows"):
             return False
 
-        lowered = user_message.lower()
+        lowered = self._normalized_message(user_message)
         asks_for_visual = any(keyword in lowered for keyword in VISUAL_FOLLOW_UP_KEYWORDS)
         references_prior_result = (
             any(keyword in lowered for keyword in PRIOR_RESULT_REFERENCES)
@@ -78,15 +149,104 @@ class HRAgent:
         )
         return asks_for_visual and references_prior_result
 
-    def _build_access_check_message(self, user_message: str, table_context: dict | None) -> str:
-        if not self._is_visualization_follow_up(user_message, table_context):
+    def _is_contextual_follow_up(self, user_message: str) -> bool:
+        if not self._latest_user_context_anchor():
+            return False
+
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+
+        words = normalized.split()
+        if len(words) > 8:
+            return False
+
+        if normalized in GENERIC_FOLLOW_UP_REPLIES:
+            return True
+        if any(phrase in normalized for phrase in CONTEXTUAL_REPLY_PHRASES):
+            return True
+        if any(word in FOLLOW_UP_REFERENCE_WORDS for word in words):
+            return True
+
+        mentions_hr_scope = any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS)
+        return not mentions_hr_scope
+
+    def _build_contextual_message(self, user_message: str) -> str:
+        prior_user_message = self._latest_user_context_anchor()
+        if not prior_user_message:
             return user_message
+        return f"{user_message} Follow-up to prior HR question: {prior_user_message}."
+
+    def _build_access_check_message(self, user_message: str, table_context: dict | None) -> str:
+        message_for_checks = user_message
+        if self._is_contextual_follow_up(user_message):
+            message_for_checks = self._build_contextual_message(message_for_checks)
+
+        if not self._is_visualization_follow_up(user_message, table_context):
+            return message_for_checks
 
         rows = table_context.get("rows") or []
         columns = list(rows[0].keys()) if rows else []
         title = str(table_context.get("title", "Latest Table") or "Latest Table")
         context_summary = f" HR table context: {title}. Columns: {', '.join(columns[:12])}."
-        return f"{user_message}{context_summary}"
+        return f"{message_for_checks}{context_summary}"
+
+    def _route_request(self, user_message: str, table_context: dict | None) -> str:
+        lowered = user_message.lower()
+        if self._is_visualization_follow_up(user_message, table_context):
+            return "visual_follow_up"
+        if any(keyword in lowered for keyword in HISTORY_LOOKUP_KEYWORDS):
+            return "history_lookup"
+        if any(keyword in lowered for keyword in DOCUMENT_LOOKUP_KEYWORDS):
+            return "policy"
+        if "report" in lowered or "roster" in lowered:
+            return "report"
+        return "data_query"
+
+    def _prefetch_context(
+        self,
+        user_message: str,
+        access_profile: AccessProfile,
+        table_context: dict | None,
+    ) -> tuple[list[dict], list[dict], list[dict], list[dict], str]:
+        route = self._route_request(user_message, table_context)
+        recent_memory = self.context_store.recent_memory(access_profile.email, limit=MAX_RECENT_MEMORY)
+        recent_memory_ids = {
+            int(item["memory_id"])
+            for item in recent_memory
+            if item.get("memory_id")
+        }
+
+        helpful_memory = self.context_store.search_memories(
+            access_profile.email,
+            user_message,
+            limit=MAX_HELPFUL_MEMORY,
+            min_feedback=1,
+            exclude_memory_ids=recent_memory_ids,
+        )
+        helpful_memory = self._dedupe_memories(helpful_memory)
+
+        related_memory: list[dict] = []
+        if route in {"history_lookup", "report", "visual_follow_up"}:
+            related_memory = self.context_store.search_memories(
+                access_profile.email,
+                user_message,
+                limit=MAX_RELATED_MEMORY,
+                exclude_memory_ids=recent_memory_ids,
+            )
+            related_memory = self._dedupe_memories(
+                related_memory + [item for item in helpful_memory if item.get("memory_id") not in recent_memory_ids]
+            )[:MAX_RELATED_MEMORY]
+
+        context_documents: list[dict] = []
+        if route == "policy":
+            context_documents = self.context_store.search_documents(
+                user_message,
+                access_profile.allowed_doc_tags,
+                limit=MAX_CONTEXT_DOCUMENTS,
+            )
+
+        return recent_memory, related_memory, helpful_memory, context_documents, route
 
     def chat(
         self,
@@ -107,32 +267,10 @@ class HRAgent:
             yield {"type": "final_text", "text": reason}
             return
 
-        recent_memory = self.context_store.recent_memory(access_profile.email)
-        recent_memory_ids = {
-            int(item["memory_id"])
-            for item in recent_memory
-            if item.get("memory_id")
-        }
-        related_memory = self.context_store.search_memories(
-            access_profile.email,
+        recent_memory, related_memory, helpful_memory, context_documents, route = self._prefetch_context(
             access_check_message,
-            limit=MAX_RELATED_MEMORY,
-            exclude_memory_ids=recent_memory_ids,
-        )
-        helpful_memory = self.context_store.search_memories(
-            access_profile.email,
-            access_check_message,
-            limit=MAX_HELPFUL_MEMORY,
-            min_feedback=1,
-            exclude_memory_ids=recent_memory_ids,
-        )
-        helpful_memory = self._dedupe_memories(helpful_memory)
-        related_memory = self._dedupe_memories(
-            related_memory + [item for item in helpful_memory if item.get("memory_id") not in recent_memory_ids]
-        )[:MAX_RELATED_MEMORY]
-        context_documents = self.context_store.search_documents(
-            user_message,
-            access_profile.allowed_doc_tags,
+            access_profile,
+            active_table_context,
         )
         if helpful_memory:
             yield {
@@ -153,6 +291,7 @@ class HRAgent:
             helpful_memory=helpful_memory,
             context_documents=context_documents,
             latest_table_context=active_table_context,
+            route=route,
         )
 
         self.conversation_history.append({"role": "user", "content": user_message})

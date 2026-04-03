@@ -521,9 +521,31 @@ def get_access_summary(request: Request):
 
 
 @app.get("/api/me/history")
-def get_recent_history(request: Request):
+def get_recent_history(request: Request, query: str = "", limit: int = 8):
     user = _require_auth(request)
-    return {"questions": CONTEXT_STORE.recent_questions(user["email"])}
+    profile = _current_access_profile(request)
+    effective_limit = max(1, min(int(limit or 8), 12))
+    summary = CONTEXT_STORE.history_summary(user["email"], allowed_metrics=profile.allowed_metrics)
+    if str(query or "").strip():
+        questions = CONTEXT_STORE.relevant_questions(
+            user["email"],
+            query,
+            limit=effective_limit,
+            allowed_metrics=profile.allowed_metrics,
+        )
+        mode = "relevant"
+    else:
+        questions = CONTEXT_STORE.recent_questions_for_sidebar(
+            user["email"],
+            limit=effective_limit,
+            allowed_metrics=profile.allowed_metrics,
+        )
+        mode = "recent"
+    return {
+        "mode": mode,
+        "questions": questions,
+        **summary,
+    }
 
 
 @app.post("/api/feedback")
@@ -544,7 +566,7 @@ def record_feedback(req: FeedbackRequest, request: Request):
 @app.post("/api/reports/export/excel")
 def export_report_excel(req: ReportExportRequest, request: Request):
     profile = _current_access_profile(request)
-    executor = ToolExecutor(DB)
+    executor = ToolExecutor(DB, context_store=CONTEXT_STORE)
     raw_result = executor.execute(
         "generate_standard_report",
         {"report_type": req.report_type.strip().lower(), "explanation": ""},

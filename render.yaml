@@ -16,6 +16,6 @@ services:
       - key: CORS_ALLOWED_ORIGINS
         value: "https://hr-intelligence-platform.onrender.com"
       - key: RATE_LIMIT_MAX_REQUESTS
-        value: "20"
+        value: "40"
       - key: RATE_LIMIT_WINDOW_SECONDS
         value: "60"

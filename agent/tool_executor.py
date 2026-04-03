@@ -13,6 +13,7 @@ import plotly.express as px
 
 from database.access_control import AccessProfile
 from database.connector import HRDatabase
+from database.context_store import ContextStore
 from utils.safety import validate_sql
 
 logger = logging.getLogger("hr_platform.tools")
@@ -61,8 +62,9 @@ CATEGORY_PRIORITY = (
 
 
 class ToolExecutor:
-    def __init__(self, db: HRDatabase):
+    def __init__(self, db: HRDatabase, context_store: ContextStore | None = None):
         self.db = db
+        self.context_store = context_store
 
     def execute(
         self,
@@ -72,6 +74,10 @@ class ToolExecutor:
         table_context: dict | None = None,
     ) -> str:
         try:
+            if tool_name == "search_past_chats":
+                return self._search_past_chats(tool_input, access_profile)
+            if tool_name == "search_context_documents":
+                return self._search_context_documents(tool_input, access_profile)
             if tool_name == "query_hr_database":
                 return self._query_database(tool_input, access_profile)
             if tool_name == "calculate_metrics":
@@ -94,6 +100,75 @@ class ToolExecutor:
         except Exception as exc:
             logger.exception("Unexpected error in tool %s", tool_name)
             return json.dumps({"error": "An unexpected error occurred while executing the tool."})
+
+    def _search_past_chats(self, inputs: dict, access_profile: AccessProfile | None) -> str:
+        if not self.context_store:
+            return json.dumps({"error": "Conversation history is not available."})
+        if access_profile is None:
+            return json.dumps({"error": "User access context is required for past-chat retrieval."})
+
+        query = str(inputs.get("query", "") or "").strip()
+        if not query:
+            return json.dumps({"error": "A search query is required."})
+
+        max_items = max(1, min(int(inputs.get("max_items", 3) or 3), 4))
+        only_helpful = bool(inputs.get("only_helpful", False))
+        items = self.context_store.search_memories(
+            access_profile.email,
+            query,
+            limit=max_items,
+            min_feedback=1 if only_helpful else None,
+        )
+        filtered_items = []
+        for item in items:
+            allowed, _ = access_profile.can_access_question(str(item.get("question", "")))
+            if allowed:
+                filtered_items.append(item)
+
+        return json.dumps(
+            {
+                "query": query,
+                "memories": [
+                    {
+                        "memory_id": item.get("memory_id"),
+                        "question": item.get("question", ""),
+                        "response_snippet": str(item.get("response", ""))[:260],
+                        "created_at": item.get("created_at"),
+                        "feedback_score": item.get("feedback_score", 0),
+                    }
+                    for item in filtered_items
+                ],
+            },
+            default=str,
+        )
+
+    def _search_context_documents(self, inputs: dict, access_profile: AccessProfile | None) -> str:
+        if not self.context_store:
+            return json.dumps({"error": "Context documents are not available."})
+
+        query = str(inputs.get("query", "") or "").strip()
+        if not query:
+            return json.dumps({"error": "A search query is required."})
+
+        max_items = max(1, min(int(inputs.get("max_items", 3) or 3), 4))
+        allowed_tags = access_profile.allowed_doc_tags if access_profile else ["all"]
+        items = self.context_store.search_documents(query, allowed_tags, limit=max_items)
+
+        return json.dumps(
+            {
+                "query": query,
+                "documents": [
+                    {
+                        "title": item.get("title", ""),
+                        "tags": item.get("tags", []),
+                        "content_snippet": str(item.get("content", ""))[:280],
+                        "created_at": item.get("created_at"),
+                    }
+                    for item in items
+                ],
+            },
+            default=str,
+        )
 
     def _query_database(self, inputs: dict, access_profile: AccessProfile | None) -> str:
         sql = inputs.get("sql_query", "").strip()
@@ -865,33 +940,33 @@ class ToolExecutor:
                     COUNT(*) as TotalEmployees,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as TotalAttrited,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees
+                FROM employees_current
             """,
             "by_department": """
                 SELECT Department,
                     COUNT(*) as Total,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as Attrited,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees GROUP BY Department ORDER BY AttritionRate_pct DESC
+                FROM employees_current GROUP BY Department ORDER BY AttritionRate_pct DESC
             """,
             "by_job_role": """
                 SELECT JobRole,
                     COUNT(*) as Total,
                     SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as Attrited,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees GROUP BY JobRole ORDER BY AttritionRate_pct DESC
+                FROM employees_current GROUP BY JobRole ORDER BY AttritionRate_pct DESC
             """,
             "by_demographics": """
                 SELECT Gender, MaritalStatus,
                     COUNT(*) as Total,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees GROUP BY Gender, MaritalStatus ORDER BY AttritionRate_pct DESC
+                FROM employees_current GROUP BY Gender, MaritalStatus ORDER BY AttritionRate_pct DESC
             """,
             "by_satisfaction": """
                 SELECT JobSatisfaction, EnvironmentSatisfaction, WorkLifeBalance,
                     COUNT(*) as Total,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees
+                FROM employees_current
                 GROUP BY JobSatisfaction, EnvironmentSatisfaction, WorkLifeBalance
                 ORDER BY AttritionRate_pct DESC LIMIT 20
             """,
@@ -905,7 +980,7 @@ class ToolExecutor:
                     END as IncomeBand,
                     COUNT(*) as Total,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees
+                FROM employees_current
                 GROUP BY IncomeBand ORDER BY AttritionRate_pct DESC
             """,
             "top_risk_factors": """
@@ -913,7 +988,7 @@ class ToolExecutor:
                     'OverTime=Yes' as RiskFactor,
                     COUNT(*) as AffectedEmployees,
                     ROUND(100.0*SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END)/COUNT(*),1) as AttritionRate_pct
-                FROM employees WHERE OverTime='Yes'
+                FROM employees_current WHERE OverTime='Yes'
                 ORDER BY AttritionRate_pct DESC
             """,
         }
@@ -941,7 +1016,7 @@ class ToolExecutor:
                     BusinessTravel,
                     OverTime,
                     Attrition
-                FROM employees
+                FROM employees_current
                 WHERE Attrition = 'No'
                 ORDER BY Department, JobRole, EmployeeNumber
             """
@@ -959,7 +1034,7 @@ class ToolExecutor:
                     BusinessTravel,
                     OverTime,
                     Attrition
-                FROM employees
+                FROM employees_current
                 WHERE Attrition = 'Yes'
                 ORDER BY Department, JobRole, EmployeeNumber
             """
