@@ -552,7 +552,7 @@ function buildDbCaption(stats) {
   const departments = (stats.allowed_departments || []).length
     ? stats.allowed_departments.join(", ")
     : "Enterprise";
-  const metricsLabel = metrics.length ? metrics.join(", ") : "scoped metrics";
+  const metricsLabel = metrics.length ? metrics.join(", ") : "approved HR measures";
   return `Business Units | ${departments} | ${metricsLabel}`;
 }
 
@@ -600,13 +600,13 @@ function scopeSummaryCard(departments) {
 
 function renderScopedPrompts() {
   const profile = state.accessProfile;
-  const scopeName = profile?.scope_name || "my scope";
+  const scopeName = profile?.scope_name || "my business units";
   const departments = profile?.allowed_departments || [];
   const hasAllMetrics = (profile?.allowed_metrics || []).includes("all");
   const allowed = new Set(normalizeMetrics(profile?.allowed_metrics || []));
   const prompts = [];
 
-  prompts.push(`What is the headcount for ${scopeName}?`);
+  prompts.push(`What is the total headcount for ${scopeName}?`);
   prompts.push(`Generate an active headcount report for ${scopeName}`);
 
   if (hasAllMetrics || allowed.has("attrition")) {
@@ -625,7 +625,7 @@ function renderScopedPrompts() {
   }
 
   if (departments.length === 1) {
-    prompts[0] = `What is the headcount for ${departments[0]}?`;
+    prompts[0] = `What is the total headcount for ${departments[0]}?`;
   }
 
   const uniquePrompts = prompts.slice(0, 5);
@@ -762,7 +762,7 @@ function renderDiveBackIn() {
         data-topic="${escAttr(topic)}"
         title="Click to reveal questions around ${escAttr(topic)}"
       >${escHtml(topic)}</button>
-    `).join("") : '<div class="history-empty">No favorite topics yet.</div>';
+    `).join("") : '<div class="history-empty">Your recurring HR topics will appear here.</div>';
   }
 
   const filteredItems = activeTopic
@@ -773,12 +773,12 @@ function renderDiveBackIn() {
   if (favoriteChatsCaption) {
     favoriteChatsCaption.textContent = activeTopic
       ? `Favorite chats related to ${activeTopic}.`
-      : "Your highest-signal chats based on past usage and feedback.";
+      : "The questions you revisit most often or marked helpful.";
   }
 
   if (!questionItems.length) {
     if (examplesEl) {
-      examplesEl.innerHTML = '<div class="history-empty">No favorite chats yet. Repeated or positively rated questions will show up here.</div>';
+      examplesEl.innerHTML = '<div class="history-empty">Questions you revisit or rate helpful will appear here.</div>';
     }
   } else {
     renderMemoryButtons(
@@ -847,7 +847,7 @@ function requestedKpiFamilies() {
 function buildCenterKpiCards() {
   if (!state.stats || !state.accessProfile) return [];
 
-  const scopeName = state.accessProfile.scope_name || "my scope";
+  const scopeName = state.accessProfile.scope_name || "my business units";
   const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
   const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
   const requestedFamilies = requestedKpiFamilies();
@@ -867,10 +867,10 @@ function buildCenterKpiCards() {
     cards.push({
       family: "Headcount",
       familyKey: "headcount",
-      label: "Current HC",
+      label: "Total headcount",
       value: Number(state.stats.total_employees || 0).toLocaleString(),
-      note: "Current scoped workforce size",
-      prompt: `What is the current headcount for ${scopeName}?`,
+      note: "Employees across your business units",
+      prompt: `What is the total headcount for ${scopeName}?`,
     });
   }
 
@@ -878,10 +878,10 @@ function buildCenterKpiCards() {
     cards.push({
       family: "Headcount",
       familyKey: "headcount",
-      label: "Active employees",
+      label: "Active headcount",
       value: Number(state.stats.active_employees || 0).toLocaleString(),
-      note: "Employees who have not attrited",
-      prompt: `How many active employees are in ${scopeName}?`,
+      note: "Employees currently active",
+      prompt: `What is the active headcount for ${scopeName}?`,
     });
   }
 
@@ -891,7 +891,7 @@ function buildCenterKpiCards() {
       familyKey: "attrition",
       label: "Attrition rate",
       value: `${state.stats.attrition_rate_pct || 0}%`,
-      note: "Current scoped attrition level",
+      note: "Attrition across your business units",
       prompt: `What is the attrition rate for ${scopeName}?`,
       tone: Number(state.stats.attrition_rate_pct || 0) > 15 ? "danger" : "",
     });
@@ -909,17 +909,17 @@ function buildCenterKpiCards() {
         familyKey: "promotion",
         label: "Promoted in last year",
         value: Number(state.stats.promoted_last_year_employees || 0).toLocaleString(),
-        note: "Employees with less than one year since last promotion",
+        note: "Employees promoted within the past year",
         prompt: `How many employees in ${scopeName} were promoted in the last year?`,
         tone: "success",
       },
       {
         family: "Promotion",
         familyKey: "promotion",
-        label: "Avg years since promotion",
+        label: "Avg time to promotion",
         value: `${Number(state.stats.avg_years_since_last_promotion || 0).toFixed(1)} yrs`,
-        note: "Current average across the scoped workforce",
-        prompt: `What is the average time since last promotion in ${scopeName}?`,
+        note: "Estimated from current employee promotion records",
+        prompt: `What is the average time to promotion in ${scopeName}?`,
       },
     );
   }
@@ -928,7 +928,7 @@ function buildCenterKpiCards() {
 }
 
 function buildCenterPromptCards(existingFamilies = []) {
-  const scopeName = state.accessProfile?.scope_name || "my scope";
+  const scopeName = state.accessProfile?.scope_name || "my business units";
   const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
   const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
   const prompts = [];
@@ -937,19 +937,19 @@ function buildCenterPromptCards(existingFamilies = []) {
   if (!used.has("headcount") && (hasAllMetrics || allowed.has("headcount"))) {
     prompts.push({
       family: "Prompt",
-      label: "Headcount view",
-      question: `What is the current headcount for ${scopeName}?`,
-      note: "Quick snapshot of current headcount and department mix",
+      label: "Headcount",
+      question: `What is the total headcount for ${scopeName}?`,
+      note: "Quick view of total headcount and department mix",
       cta: "Ask this question",
-      prompt: `What is the current headcount for ${scopeName}?`,
+      prompt: `What is the total headcount for ${scopeName}?`,
     });
   }
   if (!used.has("attrition") && (hasAllMetrics || allowed.has("attrition"))) {
     prompts.push({
       family: "Prompt",
-      label: "Attrition view",
+      label: "Attrition",
       question: `Show attrition by department for ${scopeName}`,
-      note: "Best next step for attrition hotspots and department risk",
+      note: "Spot attrition hotspots and department risk",
       cta: "Ask this question",
       prompt: `Show attrition by department for ${scopeName}`,
     });
@@ -957,9 +957,9 @@ function buildCenterPromptCards(existingFamilies = []) {
   if (!used.has("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
     prompts.push({
       family: "Prompt",
-      label: "Promotion view",
+      label: "Promotion",
       question: `Show employees with recent promotions in ${scopeName}`,
-      note: "Use this to review promotions and salary-hike signals",
+      note: "Review recent promotions and salary movement",
       cta: "Ask this question",
       prompt: `Show employees with recent promotions in ${scopeName}`,
     });
@@ -969,17 +969,17 @@ function buildCenterPromptCards(existingFamilies = []) {
     {
       label: "Suggested next question",
       question: `Generate an active headcount report for ${scopeName}`,
-      note: "Open a roster-style workforce view for your current scope",
+      note: "Open an employee-level active headcount report",
     },
     {
       label: "Suggested next question",
       question: `What is the attrition rate for ${scopeName}?`,
-      note: "Check the current attrition baseline for your scoped team",
+      note: "Check the current attrition baseline across your business units",
     },
     {
       label: "Suggested next question",
-      question: `What is the average time since last promotion in ${scopeName}?`,
-      note: "Review promotion timing across the scoped workforce",
+      question: `What is the average time to promotion in ${scopeName}?`,
+      note: "Review promotion timing across your business units",
     },
   ];
 
@@ -1034,7 +1034,7 @@ function renderMetricExamples(profile) {
 
   if (hasAllMetrics || allowed.has("headcount")) {
     metrics.push("Headcount");
-    metrics.push("Active workforce");
+    metrics.push("Active headcount");
     metrics.push("Department mix");
   }
   if (hasAllMetrics || allowed.has("attrition")) {
@@ -1113,7 +1113,7 @@ function renderTopicSuggestions(topic, profile) {
     <div class="topic-suggestions-header">
       <div class="topic-suggestions-kicker">Topic Starters</div>
       <div class="topic-suggestions-title">${escHtml(topic)}</div>
-      <div class="topic-suggestions-sub">Try one of these scoped HR questions next.</div>
+      <div class="topic-suggestions-sub">Try one of these HR questions next.</div>
     </div>
     <div class="topic-suggestions-list"></div>
   `;
@@ -1123,22 +1123,22 @@ function renderTopicSuggestions(topic, profile) {
 
 function buildTopicQuestions(topic, profile) {
   const normalizedTopic = String(topic || "").toLowerCase();
-  const scopeName = profile?.scope_name || "my scope";
+  const scopeName = profile?.scope_name || "my business units";
   const departments = profile?.allowed_departments || [];
   const primaryScope = departments.length === 1 ? departments[0] : scopeName;
 
   const templates = {
     "headcount": [
-      `What is the current headcount for ${primaryScope}?`,
-      `Show headcount by department for ${scopeName}`,
+      `What is the total headcount for ${primaryScope}?`,
+      `Show total headcount by department for ${scopeName}`,
       `Which job roles have the highest headcount in ${scopeName}?`,
       `Turn the headcount breakdown for ${scopeName} into a visualization`,
     ],
     "active workforce": [
-      `How many active employees are in ${scopeName}?`,
+      `What is the active headcount for ${scopeName}?`,
       `Generate an active headcount report for ${scopeName}`,
-      `Show active workforce by department for ${scopeName}`,
-      `Which teams in ${scopeName} have the largest active workforce?`,
+      `Show active headcount by department for ${scopeName}`,
+      `Which teams in ${scopeName} have the largest active headcount?`,
     ],
     "department mix": [
       `What is the department mix for ${scopeName}?`,
@@ -1304,15 +1304,15 @@ function updateTopbarSub() {
     },
     {
       id: "scope",
-      label: "Scope",
+      label: "Coverage",
       value: truncate(scopeSummary, 24),
       hover: departments.length ? departments.join(", ") : "Enterprise-wide access",
     },
     {
       id: "guardrails",
-      label: "Guardrails",
-      value: "HR-only",
-      hover: "Role-aware HR insights with governed access controls",
+      label: "Access",
+      value: "Role-based",
+      hover: "HR analytics only, with governed role-based access",
     },
     {
       id: "model",
@@ -1373,7 +1373,7 @@ function buildPersonalizedKpiPrompts() {
 
 function revealMetricSummary() {
   const allowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
-  return allowed.includes("all") ? "All governed HR metrics" : (allowed.join(", ") || "Scoped metrics");
+  return allowed.includes("all") ? "All approved HR measures" : (allowed.join(", ") || "Approved HR measures");
 }
 
 function renderTopbarReveal() {
@@ -1394,25 +1394,25 @@ function renderTopbarReveal() {
       <div class="topbar-reveal-card">
         <div class="topbar-reveal-kicker">Role Context</div>
         <div class="topbar-reveal-title">${escHtml(state.accessProfile?.role || "Authorized user")}</div>
-        <div class="topbar-reveal-copy">Signed in as ${escHtml(state.user?.name || "your HR user")}. Your current view is limited to the metrics and document tags approved for this role.</div>
+        <div class="topbar-reveal-copy">Signed in as ${escHtml(state.user?.name || "your HR user")}. Your view includes only the business units, measures, and policy context approved for this role.</div>
       </div>
     `;
   } else if (state.activeTopbarPanel === "scope") {
     content = `
       <div class="topbar-reveal-card">
-        <div class="topbar-reveal-kicker">Scope</div>
+        <div class="topbar-reveal-kicker">Coverage</div>
         <div class="topbar-reveal-title">${escHtml(state.accessProfile?.scope_name || "Enterprise")}</div>
         <div class="topbar-reveal-copy">${departments.length ? escHtml(departments.join(", ")) : "Enterprise-wide access"}.</div>
-        <div class="topbar-reveal-note">Accessible metrics: ${escHtml(revealMetricSummary())}</div>
+        <div class="topbar-reveal-note">Visible measures: ${escHtml(revealMetricSummary())}</div>
       </div>
     `;
   } else if (state.activeTopbarPanel === "guardrails") {
     content = `
       <div class="topbar-reveal-card">
-        <div class="topbar-reveal-kicker">Guardrails</div>
-        <div class="topbar-reveal-title">HR-only, role-approved analysis</div>
-        <div class="topbar-reveal-copy">The assistant stays inside HR topics, applies your role scope before analysis, and only surfaces data domains you are allowed to access.</div>
-        <div class="topbar-reveal-note">Current access: ${escHtml(revealMetricSummary())}</div>
+        <div class="topbar-reveal-kicker">Access</div>
+        <div class="topbar-reveal-title">HR analytics with role-based access</div>
+        <div class="topbar-reveal-copy">The assistant stays within HR questions and only uses the business units and measures approved for your role.</div>
+        <div class="topbar-reveal-note">Current measures: ${escHtml(revealMetricSummary())}</div>
       </div>
     `;
   } else if (state.activeTopbarPanel === "model") {
@@ -1428,8 +1428,8 @@ function renderTopbarReveal() {
     content = `
       <div class="topbar-reveal-card">
         <div class="topbar-reveal-kicker">Most Relevant To You</div>
-        <div class="topbar-reveal-title">KPIs shaped by your recent history</div>
-        <div class="topbar-reveal-copy">These prompts lean into the KPI themes you revisit most often.</div>
+        <div class="topbar-reveal-title">Measures shaped by your recent history</div>
+        <div class="topbar-reveal-copy">These suggestions lean into the workforce themes you revisit most often.</div>
         <div class="topbar-reveal-pills">
           ${favoriteKpis.map((item) => `<button type="button" class="topbar-reveal-pill" data-q="${escAttr(item.prompt)}">${escHtml(item.topic)}</button>`).join("")}
         </div>
@@ -2776,11 +2776,11 @@ function buildRelevantChatItems(personalizedItems = [], pastItems = []) {
 
 function renderRelevantHistory(questions) {
   if (relevantHistoryCaption) {
-    relevantHistoryCaption.textContent = "Role-aware chats based on the question types you ask most often.";
+    relevantHistoryCaption.textContent = "Questions closely aligned to your role and the HR themes you revisit most.";
   }
   if (!relevantHistoryList) return;
   if (!questions.length) {
-    renderHistoryState(relevantHistoryList, "No role-aware relevant chats yet. Ask a few more scoped questions and this list will sharpen.");
+    renderHistoryState(relevantHistoryList, "Ask a few more HR questions and this list will sharpen.");
     return;
   }
   renderHistoryItems(relevantHistoryList, questions);
@@ -2788,7 +2788,7 @@ function renderRelevantHistory(questions) {
 
 function renderPastHistory(questions) {
   if (pastHistoryCaption) {
-    pastHistoryCaption.textContent = "Questions asked across your prior sessions.";
+    pastHistoryCaption.textContent = "Questions asked across all prior sessions.";
   }
   if (!pastHistoryList) return;
   if (!questions.length) {

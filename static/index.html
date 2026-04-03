@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=20260403v" />
+  <link rel="stylesheet" href="/static/style.css?v=20260403v3" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 </head>
 <body>
@@ -34,12 +34,12 @@
 
       <div class="auth-features">
         <div class="auth-feature">
-          <span>HR-only platform scope</span>
-          <small>Out-of-scope requests are rejected before analysis starts</small>
+          <span>HR-only people analytics</span>
+          <small>Questions outside HR and workforce analytics are blocked before analysis starts</small>
         </div>
         <div class="auth-feature">
           <span>Role-based workforce data access</span>
-          <small>Metrics and queries are filtered to the user's assigned scope</small>
+          <small>Answers stay within the business units and measures approved for your role</small>
         </div>
         <div class="auth-feature">
           <span>Context and memory aware</span>
@@ -122,7 +122,7 @@
         <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="favorites">
-        <div class="sidebar-caption" id="favoriteChatsCaption">Your highest-signal chats based on past usage and feedback.</div>
+        <div class="sidebar-caption" id="favoriteChatsCaption">The questions you revisit most often or marked helpful.</div>
         <div class="sidebar-subsection">
           <div id="examples" class="examples-list">
             <div class="history-empty">Loading favorite chats...</div>
@@ -137,7 +137,7 @@
         <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="relevant">
-        <div class="sidebar-caption" id="relevantHistoryCaption">Role-aware chats based on the question types you ask most often.</div>
+        <div class="sidebar-caption" id="relevantHistoryCaption">Questions closely aligned to your role and the HR themes you revisit most.</div>
         <div id="relevantHistoryList" class="history-list">
           <div class="history-empty">Loading relevant chats...</div>
         </div>
@@ -150,7 +150,7 @@
         <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="past">
-        <div class="sidebar-caption" id="pastHistoryCaption">Questions asked across your prior sessions.</div>
+        <div class="sidebar-caption" id="pastHistoryCaption">Questions asked across all prior sessions.</div>
         <div id="pastHistoryList" class="history-list">
           <div class="history-empty">Loading past chats...</div>
         </div>
@@ -219,7 +219,7 @@
             </svg>
           </div>
           <h2 class="empty-title">Your HR Intelligence Partner</h2>
-          <p class="empty-sub">Generate reports, visualizations, and insights from your scoped HR data. Your center board then highlights the workforce KPIs and follow-up questions you revisit most often, using your scope and prior HR question patterns.</p>
+          <p class="empty-sub">Generate reports, visualizations, and insights from your HR data. Your center board then highlights the workforce measures and follow-up questions you return to most often, based on your business area and prior HR questions.</p>
           <div class="empty-kpi-board" id="centerKpiBoard"></div>
           <div class="metric-examples" id="metricExamples"></div>
           <div class="topic-suggestions hidden" id="topicSuggestions"></div>
@@ -230,7 +230,7 @@
         <div class="input-inner">
           <textarea
             id="chatInput"
-            placeholder="Ask a scoped HR insights question..."
+            placeholder="Ask an HR question about total headcount, active headcount, attrition, or other workforce trends..."
             rows="1"
             class="chat-textarea"
           ></textarea>
@@ -239,13 +239,13 @@
             <svg id="loadingIcon" class="spin hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10" opacity=".25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-dasharray="16" /></svg>
           </button>
         </div>
-        <p class="input-hint">Out-of-scope and unauthorized requests are blocked automatically.</p>
+        <p class="input-hint">Questions outside your HR access are blocked automatically.</p>
       </div>
     </div>
   </div>
 
   <div class="toast hidden" id="toast"></div>
 
-  <script src="/static/app.js?v=20260403v"></script>
+  <script src="/static/app.js?v=20260403v3"></script>
 </body>
 </html>
