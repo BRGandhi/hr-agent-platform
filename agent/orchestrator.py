@@ -88,6 +88,27 @@ class HRAgent:
             self.llm_config = normalized
             self.client = create_llm_client(normalized)
 
+    def prime_recalled_memory(self, question: str, response: str):
+        question_text = str(question or "").strip()
+        response_text = str(response or "").strip()
+        if not question_text or not response_text:
+            return
+
+        if len(self.conversation_history) >= 2:
+            prior_user = self.conversation_history[-2]
+            prior_assistant = self.conversation_history[-1]
+            if (
+                prior_user.get("role") == "user"
+                and prior_assistant.get("role") == "assistant"
+                and self._normalized_message(str(prior_user.get("content") or "")) == self._normalized_message(question_text)
+                and self._normalized_message(str(prior_assistant.get("content") or "")) == self._normalized_message(response_text)
+            ):
+                return
+
+        self.conversation_history.append({"role": "user", "content": question_text})
+        self.conversation_history.append({"role": "assistant", "content": response_text})
+        self._trim_history()
+
     def _trim_history(self):
         """Keep conversation history within bounds to control token usage."""
         if len(self.conversation_history) > MAX_CONVERSATION_HISTORY:
@@ -123,6 +144,40 @@ class HRAgent:
                 return content
         return fallback
 
+    def _recent_memory_context_anchor(self, access_profile: AccessProfile | None) -> dict[str, str]:
+        if access_profile is None:
+            return {}
+
+        recent_items = self.context_store.recent_memory(access_profile.email, limit=3)
+        fallback_question = ""
+        fallback_response = ""
+
+        for item in recent_items:
+            question = str(item.get("question") or "").strip()
+            response = str(item.get("response") or "").strip()
+            if not question:
+                continue
+            if not fallback_question:
+                fallback_question = question
+                fallback_response = response
+
+            normalized = self._normalized_message(question)
+            if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
+                return {"question": question, "response": response}
+            if len(normalized.split()) > 4 or "?" in question:
+                return {"question": question, "response": response}
+
+        if fallback_question:
+            return {"question": fallback_question, "response": fallback_response}
+        return {}
+
+    def _resolve_follow_up_context(self, access_profile: AccessProfile | None = None) -> dict[str, str]:
+        history_question = self._latest_user_context_anchor()
+        history_response = self._latest_message_content("assistant")
+        if history_question:
+            return {"question": history_question, "response": history_response}
+        return self._recent_memory_context_anchor(access_profile)
+
     def _dedupe_memories(self, memories: list[dict]) -> list[dict]:
         deduped: list[dict] = []
         seen_ids: set[int] = set()
@@ -149,8 +204,8 @@ class HRAgent:
         )
         return asks_for_visual and references_prior_result
 
-    def _is_contextual_follow_up(self, user_message: str) -> bool:
-        if not self._latest_user_context_anchor():
+    def _is_contextual_follow_up(self, user_message: str, access_profile: AccessProfile | None = None) -> bool:
+        if not self._resolve_follow_up_context(access_profile):
             return False
 
         normalized = self._normalized_message(user_message)
@@ -171,25 +226,41 @@ class HRAgent:
         mentions_hr_scope = any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS)
         return not mentions_hr_scope
 
-    def _build_contextual_message(self, user_message: str) -> str:
-        prior_user_message = self._latest_user_context_anchor()
+    def _build_contextual_message(
+        self,
+        user_message: str,
+        access_profile: AccessProfile | None = None,
+    ) -> tuple[str, dict[str, str]]:
+        follow_up_context = self._resolve_follow_up_context(access_profile)
+        prior_user_message = str(follow_up_context.get("question") or "").strip()
         if not prior_user_message:
-            return user_message
-        return f"{user_message} Follow-up to prior HR question: {prior_user_message}."
+            return user_message, {}
 
-    def _build_access_check_message(self, user_message: str, table_context: dict | None) -> str:
+        prior_response = str(follow_up_context.get("response") or "").strip()
+        contextual_message = f"{user_message} Follow-up to prior HR question: {prior_user_message}."
+        if prior_response:
+            contextual_message += f" Prior assistant context: {prior_response[:260]}."
+        return contextual_message, follow_up_context
+
+    def _build_access_check_message(
+        self,
+        user_message: str,
+        table_context: dict | None,
+        access_profile: AccessProfile | None = None,
+    ) -> tuple[str, dict[str, str]]:
         message_for_checks = user_message
-        if self._is_contextual_follow_up(user_message):
-            message_for_checks = self._build_contextual_message(message_for_checks)
+        follow_up_context: dict[str, str] = {}
+        if self._is_contextual_follow_up(user_message, access_profile):
+            message_for_checks, follow_up_context = self._build_contextual_message(message_for_checks, access_profile)
 
         if not self._is_visualization_follow_up(user_message, table_context):
-            return message_for_checks
+            return message_for_checks, follow_up_context
 
         rows = table_context.get("rows") or []
         columns = list(rows[0].keys()) if rows else []
         title = str(table_context.get("title", "Latest Table") or "Latest Table")
         context_summary = f" HR table context: {title}. Columns: {', '.join(columns[:12])}."
-        return f"{message_for_checks}{context_summary}"
+        return f"{message_for_checks}{context_summary}", follow_up_context
 
     def _route_request(self, user_message: str, table_context: dict | None) -> str:
         lowered = user_message.lower()
@@ -223,6 +294,7 @@ class HRAgent:
             limit=MAX_HELPFUL_MEMORY,
             min_feedback=1,
             exclude_memory_ids=recent_memory_ids,
+            require_strong_match=True,
         )
         helpful_memory = self._dedupe_memories(helpful_memory)
 
@@ -233,6 +305,7 @@ class HRAgent:
                 user_message,
                 limit=MAX_RELATED_MEMORY,
                 exclude_memory_ids=recent_memory_ids,
+                require_strong_match=True,
             )
             related_memory = self._dedupe_memories(
                 related_memory + [item for item in helpful_memory if item.get("memory_id") not in recent_memory_ids]
@@ -261,7 +334,11 @@ class HRAgent:
             }
 
         active_table_context = self.last_table_context
-        access_check_message = self._build_access_check_message(user_message, active_table_context)
+        access_check_message, follow_up_context = self._build_access_check_message(
+            user_message,
+            active_table_context,
+            access_profile,
+        )
         allowed, reason = access_profile.can_access_question(access_check_message)
         if not allowed:
             yield {"type": "final_text", "text": reason}
@@ -292,6 +369,7 @@ class HRAgent:
             context_documents=context_documents,
             latest_table_context=active_table_context,
             route=route,
+            current_follow_up_context=follow_up_context,
         )
 
         self.conversation_history.append({"role": "user", "content": user_message})

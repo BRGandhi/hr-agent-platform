@@ -76,7 +76,11 @@ class ChatContextTests(unittest.TestCase):
             {"role": "assistant", "content": "I can break that down further if you'd like."},
         ]
 
-        access_check_message = agent._build_access_check_message("job level", table_context=None)
+        access_check_message, _ = agent._build_access_check_message(
+            "job level",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
 
         self.assertIn("follow-up to prior hr question", access_check_message.lower())
         self.assertIn("headcount", access_check_message.lower())
@@ -92,10 +96,67 @@ class ChatContextTests(unittest.TestCase):
             {"role": "assistant", "content": "Which breakdown would you like next?"},
         ]
 
-        access_check_message = agent._build_access_check_message("job level", table_context=None)
+        access_check_message, _ = agent._build_access_check_message(
+            "job level",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
 
         self.assertIn("headcount for business units", access_check_message.lower())
         self.assertNotIn("follow-up to prior hr question: yes", access_check_message.lower())
+
+    def test_follow_up_uses_recent_memory_when_session_context_is_missing(self):
+        agent = self._make_agent()
+        self.store.remember(
+            self.access_profile.email,
+            "What is the headcount for Business Units?",
+            "The scoped headcount is 1,470 employees. Would you like a deeper breakdown by job role, demographics, or attrition?",
+        )
+
+        access_check_message, follow_up_context = agent._build_access_check_message(
+            "yes",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
+
+        self.assertIn("headcount for business units", access_check_message.lower())
+        self.assertIn("prior assistant context", access_check_message.lower())
+        self.assertIn("headcount", str(follow_up_context.get("question", "")).lower())
+        allowed, reason = self.access_profile.can_access_question(access_check_message)
+        self.assertTrue(allowed, reason)
+
+    def test_recalled_memory_primes_follow_up_context(self):
+        agent = self._make_agent()
+        agent.prime_recalled_memory(
+            "What is the headcount for Business Units?",
+            "The scoped headcount is 1,470 employees. Would you like a deeper breakdown by job level or department?",
+        )
+
+        access_check_message, follow_up_context = agent._build_access_check_message(
+            "yes",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
+
+        self.assertIn("headcount for business units", access_check_message.lower())
+        self.assertIn("headcount", str(follow_up_context.get("question", "")).lower())
+        allowed, reason = self.access_profile.can_access_question(access_check_message)
+        self.assertTrue(allowed, reason)
+
+    def test_agent_skips_helpful_memories_when_match_is_not_close_enough(self):
+        agent = self._make_agent()
+        memory_id = self.store.remember(
+            self.access_profile.email,
+            "Show headcount by department for Business Units",
+            "Research & Development has the largest department headcount.",
+        )
+        self.store.record_feedback(self.access_profile.email, memory_id, "yes")
+
+        events = list(agent.chat("Which job roles have the highest headcount in Business Units?", self.access_profile))
+
+        event_types = [event["type"] for event in events]
+        self.assertNotIn("helpful_memories", event_types)
+        self.assertEqual(event_types[-1], "final_text")
 
 
 if __name__ == "__main__":

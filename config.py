@@ -52,5 +52,5 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 # Conversation history: max messages kept in agent loop
 MAX_CONVERSATION_HISTORY = int(os.getenv("MAX_CONVERSATION_HISTORY", "40"))
 
-# Memory retention: days to keep conversation memory
-MEMORY_RETENTION_DAYS = int(os.getenv("MEMORY_RETENTION_DAYS", "90"))
+# Memory retention: days to keep conversation memory; 0 disables auto-cleanup.
+MEMORY_RETENTION_DAYS = int(os.getenv("MEMORY_RETENTION_DAYS", "0"))

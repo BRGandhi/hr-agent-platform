@@ -34,9 +34,12 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 ### 3. Context and memory layer
 - User-specific prior questions are stored in `context_store.db`.
 - The orchestrator now searches broader past interactions for related answers, not just the most recent turns.
+- Past chats are retained indefinitely by default, so the context layer can accumulate durable user history over time.
+- Each saved chat now stores the original question, full answer, feedback score, and a compact `insight_summary` used for sidebar recall and personalization.
 - Users can upvote or downvote responses, and positively rated answers can be surfaced later for similar questions.
 - HR policy and schema reference documents are retrieved per question and injected into the system prompt.
 - The UI surfaces previously asked questions in the sidebar.
+- Clicking a saved favorite, relevant, or past chat now recalls the cached insight summary instead of rerunning the query.
 
 ### 4. Standard HR reports
 - The agent can generate a scoped active headcount report.
@@ -95,6 +98,8 @@ The newest generation of the agent is optimized around governed follow-up work i
 - Inline feedback loop: each assistant answer supports `Yes` / `No` helpfulness feedback for future curation.
 - Personalized navigation: the sidebar now separates favorite, relevant, and past chats so users can return to strong prior work faster.
 - Session-aware follow-ups: short replies now inherit the active HR question context before access validation runs.
+- Strong-match history retrieval: prior chats are only suggested when the new ask is genuinely close in topic and wording, avoiding noisy broad-memory recommendations.
+- Cached recall flow: sidebar chat recalls now return saved insight summaries and seed the active session context without forcing a fresh database query.
 - Response quality upgrades: the browser renderer promotes section headings, preserves rich Markdown better, and presents metric summaries more cleanly.
 
 ## Architecture At A Glance
@@ -135,6 +140,35 @@ SQLite stores
 ```
 
 For the full architecture walkthrough, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Agentic Retrieval, Context, And Recall
+
+The current platform is not a single-prompt chatbot wrapped in an HR UI. It uses a layered, agentic retrieval approach before the model produces the final answer.
+
+### 1. Request routing before tool use
+- The orchestrator classifies each turn into modes such as `data_query`, `report`, `policy`, `history_lookup`, and `visual_follow_up`.
+- That route determines whether the agent should prioritize workforce SQL, context documents, prior chats, or latest-table follow-up behavior.
+
+### 2. Multi-layer context assembly
+- Short in-session follow-ups such as `yes`, `job level`, or `show me` are anchored to the latest meaningful HR turn.
+- If the live session context is thin, the agent can fall back to recent stored memory for the same signed-in user.
+- The prompt builder merges access scope, recent memory, related memory, helpful prior answers, approved HR documents, and latest generated table context.
+
+### 3. Strong-match history retrieval
+- The context store scores memory candidates by topic overlap, wording similarity, and query coverage.
+- `Relevant Chats` and `helpful past answers` now require a strong topical and semantic match rather than merely sharing a broad KPI family.
+- This keeps the memory layer useful without overwhelming the user with weak or noisy recommendations.
+
+### 4. Cached recall instead of rerun
+- Sidebar clicks on saved chats use a dedicated recall path instead of sending the old question back through `/api/chat`.
+- The recall flow returns the stored `insight_summary` from `context_store.db`, renders it in the chat surface, and primes the active session with the original saved Q&A.
+- After recall, a follow-up like `yes` or `break that down` continues from the recalled chat context rather than starting over.
+
+### 5. Sidebar model
+- `Favorite Topics` reflects the KPI families the user revisits most often.
+- `Favorite Chats` reflects high-signal prior work shaped by feedback and reuse patterns.
+- `Relevant Chats` is role-aware and intentionally strict.
+- `Past Chats` is the broader historical list across sessions for the signed-in user.
 
 ## Fresh Start: Clone And Run
 
@@ -233,6 +267,7 @@ You should then see:
 - role-aware example questions
 - clickable topic chips that expand into sample prompts
 - previously asked questions in the sidebar
+- past-chat recall without rerunning the original query
 - `Yes` / `No` helpfulness controls after assistant responses
 - the ability to connect an LLM provider from the top banner
 
@@ -254,7 +289,7 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 ### Data and policy layer
 - [database/connector.py](database/connector.py): scoped SQLite query layer
 - [database/access_control.py](database/access_control.py): role and scope resolution
-- [database/context_store.py](database/context_store.py): memory and context docs
+- [database/context_store.py](database/context_store.py): memory, insight summaries, recall metadata, and context docs
 - [database/schema.py](database/schema.py): schema prompt reference
 
 ### Frontend
@@ -299,7 +334,7 @@ Recommended practice for future updates:
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Length of the rate-limit window |
 | `LLM_TIMEOUT_SECONDS` | `60` | Upstream LLM request timeout |
 | `MAX_CONVERSATION_HISTORY` | `40` | Sliding window size for agent conversation history |
-| `MEMORY_RETENTION_DAYS` | `90` | How long conversation memory is retained |
+| `MEMORY_RETENTION_DAYS` | `0` | How long conversation memory is retained; `0` keeps past chats indefinitely |
 | `PORT` | `8000` | Backend port when using `server.py` or `uvicorn` |
 
 Runtime-created stores:

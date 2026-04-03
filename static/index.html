@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css?v=20260403n" />
+  <link rel="stylesheet" href="/static/style.css?v=20260403v" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
 </head>
 <body>
@@ -106,18 +106,24 @@
 
       <hr class="sidebar-divider" />
 
+      <button type="button" class="sidebar-section-toggle" data-section-toggle="topics" aria-expanded="true">
+        <span class="sidebar-section-label">Favorite Topics</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="sidebar-section-body" data-section-body="topics">
+        <div class="sidebar-caption">The HR themes you revisit most often.</div>
+        <div id="favoriteTopics" class="favorite-topics"></div>
+      </div>
+
+      <hr class="sidebar-divider" />
+
       <button type="button" class="sidebar-section-toggle" data-section-toggle="favorites" aria-expanded="true">
         <span class="sidebar-section-label">Favorite Chats</span>
-        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="favorites">
         <div class="sidebar-caption" id="favoriteChatsCaption">Your highest-signal chats based on past usage and feedback.</div>
         <div class="sidebar-subsection">
-          <div class="sidebar-mini-label">Favorite Topics</div>
-          <div id="favoriteTopics" class="favorite-topics"></div>
-        </div>
-        <div class="sidebar-subsection">
-          <div class="sidebar-mini-label">Favorite Chats</div>
           <div id="examples" class="examples-list">
             <div class="history-empty">Loading favorite chats...</div>
           </div>
@@ -128,7 +134,7 @@
 
       <button type="button" class="sidebar-section-toggle" data-section-toggle="relevant" aria-expanded="true">
         <span class="sidebar-section-label">Relevant Chats</span>
-        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="relevant">
         <div class="sidebar-caption" id="relevantHistoryCaption">Role-aware chats based on the question types you ask most often.</div>
@@ -141,7 +147,7 @@
 
       <button type="button" class="sidebar-section-toggle" data-section-toggle="past" aria-expanded="true">
         <span class="sidebar-section-label">Past Chats</span>
-        <span class="sidebar-toggle-chev" aria-hidden="true">▾</span>
+        <span class="sidebar-toggle-chev" aria-hidden="true">&#9662;</span>
       </button>
       <div class="sidebar-section-body" data-section-body="past">
         <div class="sidebar-caption" id="pastHistoryCaption">Questions asked across your prior sessions.</div>
@@ -240,6 +246,6 @@
 
   <div class="toast hidden" id="toast"></div>
 
-  <script src="/static/app.js?v=20260403n"></script>
+  <script src="/static/app.js?v=20260403v"></script>
 </body>
 </html>

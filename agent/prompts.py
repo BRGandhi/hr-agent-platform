@@ -13,6 +13,7 @@ def build_system_prompt(
     context_documents: list[dict],
     latest_table_context: dict | None = None,
     route: str = "",
+    current_follow_up_context: dict | None = None,
 ) -> str:
     recent_memory_block = "\n".join(
         f"- Q: {item['question']}\n  A: {item['response'][:140]}"
@@ -46,6 +47,12 @@ def build_system_prompt(
         f"- Row count: {len(latest_table_rows)}\n"
         f"- Sample rows: {latest_table_sample}"
     ) if latest_table_rows else "- No generated table is currently available for follow-up visualization."
+    follow_up_question = str((current_follow_up_context or {}).get("question") or "").strip()
+    follow_up_response = str((current_follow_up_context or {}).get("response") or "").strip()
+    follow_up_block = (
+        f"- Prior HR question: {follow_up_question}\n"
+        f"- Prior assistant context: {follow_up_response[:280] if follow_up_response else 'None'}"
+    ) if follow_up_question else "- No explicit short-reply follow-up context was resolved for this turn."
 
     return f"""You are an HR Intelligence Assistant.
 
@@ -89,6 +96,9 @@ Relevant context documents preloaded for this turn:
 
 ## Latest Table Context
 {latest_table_block}
+
+## Current Follow-up Context
+{follow_up_block}
 
 ## How to Respond
 1. Use `search_past_chats` when you need more than the compact memory briefing above.

@@ -72,6 +72,7 @@ Primary endpoints:
 - `POST /api/auth/logout`: logout
 - `GET /api/me/access`: resolved user access profile
 - `GET /api/me/history`: recent questions for sidebar history
+- `POST /api/memories/{memory_id}/recall`: recall a saved chat insight without rerunning the original query
 - `POST /api/feedback`: store `Yes` / `No` helpfulness feedback for a saved response
 - `POST /api/reports/export/excel`: regenerate a scoped standard report and download it as an Excel-compatible workbook
 - `GET /api/context/documents`: list retrieved context docs
@@ -88,6 +89,7 @@ Responsibilities:
 - top-banner LLM connection
 - scoped KPI display
 - sidebar history and example prompts
+- cached recall of saved chats
 - clickable topic chips that expand into suggested follow-up questions
 - SSE event consumption
 - tool-call, chart, visual-option, table, markdown, similar-answer, report-export, and feedback rendering
@@ -110,7 +112,9 @@ Responsibilities:
 4. The server builds an `LLMConfig` object and gets or creates an `HRAgent`.
 5. [agent/orchestrator.py](agent/orchestrator.py) performs:
    - scope validation
+   - request routing (`data_query`, `report`, `policy`, `history_lookup`, `visual_follow_up`)
    - in-session conversation history lookup
+   - short-follow-up resolution for replies such as `yes` or `job level`
    - recent and related memory lookup across stored user interactions
    - helpful-answer retrieval from previously upvoted responses
    - context document retrieval
@@ -130,6 +134,15 @@ The frontend now treats generated tables differently based on structure:
 - larger employee-level or identifier-heavy tables render without a chart CTA
 
 This avoids encouraging low-value charts for roster-style outputs while keeping guided visualization available for aggregated insights.
+
+### 4.4 Saved-chat recall lifecycle
+1. The user clicks a favorite, relevant, or past chat in the sidebar.
+2. The browser calls `POST /api/memories/{memory_id}/recall` instead of posting the question back to `/api/chat`.
+3. The server retrieves the saved chat from `context_store.db`, enforcing the current user's identity and allowed metric scope.
+4. The API returns the stored `question`, `insight_summary`, metadata, and a session id.
+5. The server primes the active `HRAgent` session with the original saved user/assistant pair.
+6. The UI renders a `Recalled Insight` card in the chat surface.
+7. Any follow-up such as `yes`, `show me`, or `break that down` continues from the recalled chat context.
 
 ## 5. Provider-Agnostic LLM Layer
 
@@ -162,6 +175,9 @@ Recent additions:
 - preserves the latest generated table for visualization follow-ups
 - emits helpful-memory events when prior upvoted answers match the current question
 - emits report metadata so the frontend can choose between chart exploration and export actions
+- primes the active session with recalled saved chats so recalled work behaves like live chat context
+- uses stronger memory matching so relevant/history suggestions only surface for close semantic matches
+- stores compact recall summaries alongside full answers for later sidebar recall and UX personalization
 
 The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](../config.py) to limit runaway tool loops.
 
@@ -196,10 +212,24 @@ This means even if the LLM proposes a broader query, the execution layer still n
 
 ### 8.1 Conversation memory
 - stores prior user question/response pairs
+- stores a compact `insight_summary` alongside each saved response
 - retrieves recent memory for the current user
 - searches broader past interactions for related question/answer pairs
 - stores per-response feedback so helpful answers can be reused as examples
 - powers the sidebar history list
+- powers saved-chat recall without rerunning the original query
+
+The context store now supports multiple retrieval modes:
+- `recent_memory`: compact prompt context for the current turn
+- `search_memories`: scored retrieval across prior chats
+- `relevant_questions`: strict strong-match history for sidebar relevance
+- `past_questions_for_sidebar`: broader cross-session history for the full past-chat list
+- `get_memory`: authenticated recall lookup for a specific saved chat
+
+Important retrieval behavior:
+- memory search uses topic overlap, query coverage, and wording similarity rather than simple recency alone
+- relevant-history suggestions require a strong match so the UI does not surface noisy prior chats
+- past chats are retained indefinitely by default unless retention is explicitly enabled through configuration
 
 ### 8.2 Context document retrieval
 - stores HR policies, schema notes, and metric definitions
@@ -209,7 +239,10 @@ This means even if the LLM proposes a broader query, the execution layer still n
 The prompt builder in [agent/prompts.py](agent/prompts.py) merges:
 - access profile
 - recent memory
+- related and helpful memory
+- current follow-up context
 - relevant context docs
+- latest table context
 - schema summary
 
 ## 9. Data Layer
@@ -225,11 +258,23 @@ SQLite store for:
 - conversation memory
 - context documents
 
+The conversation-memory table now acts as both:
+- the long-term user memory store
+- the cached recall store for saved prior answers
+
+The context-store payload supports:
+- sidebar history
+- positive/negative feedback curation
+- strict relevant-chat suggestions
+- cached recall of prior insight summaries
+
 ## 10. Tool Layer
 
 [agent/tools.py](agent/tools.py) declares the canonical tool schemas used by every provider.
 
 Current tools:
+- `search_past_chats`
+- `search_context_documents`
 - `query_hr_database`
 - `calculate_metrics`
 - `create_visualization`
@@ -249,6 +294,8 @@ Important design choice:
 - current conversation session id
 - selected provider/model/base URL
 - tool-call visibility preference
+- sidebar collapse state
+- active favorite-topic filter
 
 ### Server session state
 [server.py](server.py) stores:

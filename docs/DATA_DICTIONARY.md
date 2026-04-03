@@ -21,6 +21,7 @@ Authorization database mapping signed-in users to role and scope.
 ### 1.3 `context_store.db`
 Memory and context database containing:
 - recent conversation history
+- saved insight summaries for recall
 - feedback on saved responses
 - HR policy and schema documents
 
@@ -163,6 +164,7 @@ This database is created by [database/context_store.py](database/context_store.p
 | `user_email` | Text | User identifier |
 | `question` | Text | Original user prompt |
 | `response` | Text | Final assistant response |
+| `insight_summary` | Text | Compact saved summary used for sidebar recall and personalization |
 | `created_at` | Text | UTC timestamp |
 | `feedback_score` | Integer | `1` for upvoted, `-1` for downvoted, `0` for unrated |
 | `feedback_updated_at` | Text | UTC timestamp of the latest feedback action |
@@ -171,9 +173,18 @@ Purpose:
 - recent and related user memory for prompt context
 - storage for curated helpful answers that can be surfaced on similar questions
 - sidebar history in the web UI
+- saved-chat recall without rerunning the original question
+- compact insight reuse for favorite, relevant, and past chat clicks
 
 Retention:
-- old conversation memory is pruned during writes based on `MEMORY_RETENTION_DAYS`
+- by default, conversation memory is retained indefinitely
+- if `MEMORY_RETENTION_DAYS` is set above `0`, old conversation memory is pruned during writes
+
+Current retrieval patterns built on top of this table:
+- `recent_memory`: compact prompt context for the current turn
+- `relevant_questions`: strong-match sidebar relevance
+- `past_questions_for_sidebar`: broader cross-session history list
+- `get_memory`: direct recall lookup for a saved prior chat
 
 ### 4.2 Table: `context_documents`
 

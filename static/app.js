@@ -9,6 +9,7 @@
  */
 
 const DEFAULT_SIDEBAR_SECTIONS = {
+  topics: false,
   favorites: false,
   relevant: false,
   past: false,
@@ -219,6 +220,17 @@ function handleDynamicButtonClick(event) {
   const sectionToggle = event.target.closest("[data-section-toggle]");
   if (sectionToggle) {
     toggleSidebarSection(sectionToggle.dataset.sectionToggle || "");
+    return true;
+  }
+
+  const memoryButton = event.target.closest("[data-memory-id][data-q]");
+  if (memoryButton) {
+    const memoryId = Number(memoryButton.dataset.memoryId || 0);
+    if (!memoryId) return true;
+    if (memoryButton.closest("#topbarReveal")) {
+      closeTopbarReveal();
+    }
+    recallStoredInsight(memoryId, memoryButton.dataset.q || "").catch(() => {});
     return true;
   }
 
@@ -716,6 +728,26 @@ function filterHistoryItemsByTopic(items, topic) {
   });
 }
 
+function renderMemoryButtons(container, className, items) {
+  if (!container) return;
+  container.innerHTML = items.map((item) => {
+    const question = String(item?.question || "").trim();
+    const memoryId = Number(item?.memory_id || 0);
+    const summary = String(item?.insight_summary || "").trim();
+    const title = summary || question;
+    const memoryAttr = memoryId ? ` data-memory-id="${escAttr(String(memoryId))}"` : "";
+    return `
+      <button
+        type="button"
+        class="${className}"
+        ${memoryAttr}
+        data-q="${escAttr(question)}"
+        title="${escAttr(title)}"
+      >${escHtml(question)}</button>
+    `;
+  }).join("");
+}
+
 function renderDiveBackIn() {
   const topics = preferredTopicsFromHistory();
   const favoriteQuestionItems = preferredQuestionItemsFromHistory();
@@ -723,14 +755,14 @@ function renderDiveBackIn() {
   state.activeDiveTopic = activeTopic;
 
   if (favoriteTopicsEl) {
-    favoriteTopicsEl.innerHTML = topics.map((topic) => `
+    favoriteTopicsEl.innerHTML = topics.length ? topics.map((topic) => `
       <button
         type="button"
         class="sidebar-topic-chip${activeTopic === topic ? " active" : ""}"
         data-topic="${escAttr(topic)}"
         title="Click to reveal questions around ${escAttr(topic)}"
       >${escHtml(topic)}</button>
-    `).join("");
+    `).join("") : '<div class="history-empty">No favorite topics yet.</div>';
   }
 
   const filteredItems = activeTopic
@@ -749,10 +781,10 @@ function renderDiveBackIn() {
       examplesEl.innerHTML = '<div class="history-empty">No favorite chats yet. Repeated or positively rated questions will show up here.</div>';
     }
   } else {
-    renderPromptButtons(
+    renderMemoryButtons(
       examplesEl,
       "example-btn",
-      questionItems.slice(0, 5).map((item) => item.question),
+      questionItems.slice(0, 5),
     );
   }
 
@@ -837,7 +869,7 @@ function buildCenterKpiCards() {
       familyKey: "headcount",
       label: "Current HC",
       value: Number(state.stats.total_employees || 0).toLocaleString(),
-      note: "Pinned first for quick workforce context",
+      note: "Current scoped workforce size",
       prompt: `What is the current headcount for ${scopeName}?`,
     });
   }
@@ -1354,7 +1386,7 @@ function renderTopbarReveal() {
 
   const departments = state.accessProfile?.allowed_departments || [];
   const favoriteKpis = buildPersonalizedKpiPrompts();
-  const favoriteQuestions = preferredQuestionsFromHistory().slice(0, 3);
+  const favoriteQuestionItems = preferredQuestionItemsFromHistory().slice(0, 3);
   let content = "";
 
   if (state.activeTopbarPanel === "role") {
@@ -1401,9 +1433,9 @@ function renderTopbarReveal() {
         <div class="topbar-reveal-pills">
           ${favoriteKpis.map((item) => `<button type="button" class="topbar-reveal-pill" data-q="${escAttr(item.prompt)}">${escHtml(item.topic)}</button>`).join("")}
         </div>
-        ${favoriteQuestions.length ? `
+        ${favoriteQuestionItems.length ? `
           <div class="topbar-reveal-list">
-            ${favoriteQuestions.map((question) => `<button type="button" class="topbar-reveal-item" data-q="${escAttr(question)}">${escHtml(question)}</button>`).join("")}
+            ${favoriteQuestionItems.map((item) => `<button type="button" class="topbar-reveal-item" ${item.memory_id ? `data-memory-id="${escAttr(String(item.memory_id))}"` : ""} data-q="${escAttr(item.question || "")}" title="${escAttr(item.insight_summary || item.question || "")}">${escHtml(item.question || "")}</button>`).join("")}
           </div>
         ` : ""}
       </div>
@@ -1418,6 +1450,106 @@ function onInputChange() {
   chatInput.style.height = "auto";
   chatInput.style.height = `${Math.min(chatInput.scrollHeight, 120)}px`;
   sendBtn.disabled = !chatInput.value.trim() || state.isLoading;
+}
+
+function ensureMessageThread() {
+  let thread = messagesEl.querySelector(".msg-thread");
+  if (!thread) {
+    thread = document.createElement("div");
+    thread.className = "msg-thread";
+    messagesEl.appendChild(thread);
+  }
+  return thread;
+}
+
+function buildRecalledInsightText(memory = {}) {
+  const question = String(memory.question || "").trim() || "Saved HR question";
+  const summary = String(memory.insight_summary || "").trim();
+  const createdAt = memory.created_at ? formatHistoryTime(memory.created_at) : "a previous chat";
+  const topics = Array.isArray(memory.topics) && memory.topics.length
+    ? `**Topics:** ${memory.topics.join(", ")}\n\n`
+    : "";
+  const summaryBlock = summary || "- Saved answer recalled from an earlier HR chat.";
+  return [
+    "### Recalled Insight",
+    `**Question:** ${question}`,
+    "",
+    topics ? topics.trimEnd() : "",
+    summaryBlock,
+    "",
+    `_Recalled from ${createdAt}. This is a saved insight summary, not a fresh query._`,
+  ].filter(Boolean).join("\n");
+}
+
+async function recallStoredInsight(memoryId, fallbackQuestion = "") {
+  if (state.authRequired && !state.user) {
+    showAuthShell();
+    return;
+  }
+  if (state.isLoading) return;
+
+  const numericMemoryId = Number(memoryId || 0);
+  if (!numericMemoryId) return;
+
+  normalizeOpenAiCompatConnection();
+  state.pendingTableContext = null;
+  state.lastTable = null;
+
+  if (emptyState) emptyState.style.display = "none";
+  const thread = ensureMessageThread();
+  const recalledQuestion = String(fallbackQuestion || "").trim();
+  if (recalledQuestion) {
+    appendUserMsg(thread, recalledQuestion);
+  }
+
+  const assistantRow = createAssistantPlaceholder(thread);
+  const contentWrap = assistantRow.querySelector(".msg-content");
+  const typingEl = document.createElement("div");
+  typingEl.className = "bubble-typing";
+  typingEl.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+  contentWrap.appendChild(typingEl);
+  scrollToBottom();
+  setLoading(true);
+
+  try {
+    const response = await fetch(`/api/memories/${numericMemoryId}/recall`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKeyInput.value.trim(),
+        provider: state.provider,
+        model: modelInput.value.trim(),
+        base_url: baseUrlInput.value.trim(),
+        session_id: state.sessionId,
+      }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        handleUnauthorized();
+        throw new Error("Please sign in to continue.");
+      }
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || "Could not recall that saved insight.");
+    }
+
+    const payload = await response.json();
+    if (payload.session_id) {
+      state.sessionId = payload.session_id;
+      localStorage.setItem("hr_session_id", payload.session_id);
+    }
+
+    const memory = payload.memory || {};
+    typingEl.remove();
+    contentWrap.appendChild(buildMarkdownBubble(buildRecalledInsightText(memory)));
+    scrollToBottom();
+  } catch (error) {
+    typingEl.remove();
+    appendErrorBubble(contentWrap, error.message || "Could not recall that saved insight.");
+    throw error;
+  } finally {
+    setLoading(false);
+  }
 }
 
 async function handleSend() {
@@ -1448,13 +1580,7 @@ async function handleSend() {
   sendBtn.disabled = true;
   if (emptyState) emptyState.style.display = "none";
 
-  let thread = messagesEl.querySelector(".msg-thread");
-  if (!thread) {
-    thread = document.createElement("div");
-    thread.className = "msg-thread";
-    messagesEl.appendChild(thread);
-  }
-
+  const thread = ensureMessageThread();
   appendUserMsg(thread, text);
   const assistantRow = createAssistantPlaceholder(thread);
   const contentWrap = assistantRow.querySelector(".msg-content");
@@ -1942,6 +2068,9 @@ function buildHelpfulMemoriesCard(items) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "helpful-memory-item";
+    if (item.memory_id) {
+      button.dataset.memoryId = String(item.memory_id);
+    }
     button.dataset.q = item.question || "";
     button.innerHTML = `
       <span class="helpful-memory-question">${escHtml(item.question || "Helpful HR answer")}</span>
@@ -2565,7 +2694,12 @@ function renderHistoryState(container, message) {
 function renderHistoryItems(container, questions) {
   if (!container) return;
   container.innerHTML = questions.map((item) => `
-    <button class="history-item" data-q="${escAttr(item.question)}" title="${escAttr(item.question)}">
+    <button
+      class="history-item"
+      ${Number(item.memory_id || 0) ? `data-memory-id="${escAttr(String(Number(item.memory_id || 0)))}"` : ""}
+      data-q="${escAttr(item.question)}"
+      title="${escAttr(item.insight_summary || item.question)}"
+    >
       <span class="history-question">${escHtml(item.question)}</span>
       <span class="history-time">${escHtml(formatHistoryTime(item.created_at))}${Array.isArray(item.topics) && item.topics.length ? ` | ${escHtml(item.topics.join(", "))}` : ""}</span>
     </button>
@@ -2611,7 +2745,7 @@ function buildRelevantHistoryQuery() {
 function buildRelevantChatItems(personalizedItems = [], pastItems = []) {
   const favorites = new Set(preferredQuestionsFromHistory().map((question) => question.toLowerCase()));
   const preferredKeys = new Set(preferredTopicsFromHistory().map((topic) => topicMetricKey(topic)).filter(Boolean));
-  const mergedItems = dedupeHistoryItems([...personalizedItems, ...pastItems], 20)
+  const mergedItems = dedupeHistoryItems(personalizedItems, 20)
     .filter((item) => !favorites.has(item.question.toLowerCase()));
 
   const scoredItems = mergedItems.map((item) => {
@@ -2637,7 +2771,7 @@ function buildRelevantChatItems(personalizedItems = [], pastItems = []) {
     .map((entry) => entry.item)
     .slice(0, 6);
 
-  return relevantItems.length ? relevantItems : mergedItems.slice(0, 6);
+  return relevantItems;
 }
 
 function renderRelevantHistory(questions) {
@@ -2708,7 +2842,9 @@ async function loadHistory() {
     }
     if (requestToken !== state.historyRequestToken) return;
 
-    const pastQuestions = dedupeHistoryItems(recentPayload.questions || [], 12);
+    const pastQuestions = Array.isArray(recentPayload.past_questions)
+      ? recentPayload.past_questions
+      : dedupeHistoryItems(recentPayload.questions || [], 12);
     const relevantQuestions = buildRelevantChatItems(
       dedupeHistoryItems(relevantPayload?.questions || [], 10),
       pastQuestions,

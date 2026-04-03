@@ -118,6 +118,7 @@ class ToolExecutor:
             query,
             limit=max_items,
             min_feedback=1 if only_helpful else None,
+            require_strong_match=True,
         )
         filtered_items = []
         for item in items:

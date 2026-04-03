@@ -5,6 +5,7 @@ import logging
 import sqlite3
 import re
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 
 from config import CONTEXT_DB_PATH, MEMORY_RETENTION_DAYS
 from database.access_control import METRIC_KEYWORDS
@@ -32,6 +33,54 @@ KPI_METRICS = {
     "tenure",
     "demographics",
 }
+SUMMARY_SECTION_HINTS = (
+    "key takeaways",
+    "takeaways",
+    "summary",
+    "highlights",
+    "insights",
+    "main takeaways",
+)
+FOLLOW_UP_SUMMARY_PATTERNS = (
+    re.compile(r"^would you like\b", re.IGNORECASE),
+    re.compile(r"^do you want\b", re.IGNORECASE),
+    re.compile(r"^let me know\b", re.IGNORECASE),
+    re.compile(r"^if you'd like\b", re.IGNORECASE),
+)
+MEMORY_MATCH_STOPWORDS = {
+    "business",
+    "unit",
+    "units",
+    "department",
+    "departments",
+    "team",
+    "teams",
+    "employee",
+    "employees",
+    "roster",
+    "breakdown",
+    "what",
+    "which",
+    "show",
+    "give",
+    "tell",
+    "current",
+    "latest",
+    "generate",
+    "create",
+    "build",
+    "report",
+    "view",
+    "please",
+    "scope",
+    "scoped",
+    "question",
+    "questions",
+    "analysis",
+    "analyze",
+    "summary",
+    "summarize",
+}
 
 
 def _utc_now() -> str:
@@ -40,6 +89,12 @@ def _utc_now() -> str:
 
 def _tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) > 2]
+
+
+def _meaningful_tokens(text: str) -> list[str]:
+    tokens = _tokenize(text)
+    filtered = [token for token in tokens if token not in MEMORY_MATCH_STOPWORDS]
+    return filtered or tokens
 
 
 def _keyword_in_text(text: str, keyword: str) -> bool:
@@ -93,6 +148,173 @@ def _topic_labels(metrics: set[str], *, kpi_only: bool = False) -> list[str]:
     return ordered
 
 
+def _memory_match_details(query: str, question: str, response: str) -> dict[str, float | int | bool]:
+    query_text = str(query or "").strip()
+    question_text = str(question or "").strip()
+    response_text = str(response or "").strip()
+    query_topics = _extract_metrics(query_text)
+    memory_topics = _extract_metrics(f"{question_text} {response_text}")
+
+    raw_query_tokens = set(_tokenize(query_text))
+    raw_question_tokens = set(_tokenize(question_text))
+    query_tokens = set(_meaningful_tokens(query_text))
+    question_tokens = set(_meaningful_tokens(question_text))
+    response_tokens = set(_meaningful_tokens(response_text))
+
+    token_overlap = len(query_tokens.intersection(question_tokens))
+    response_overlap = len(query_tokens.intersection(response_tokens))
+    shared_raw_tokens = len(raw_query_tokens.intersection(raw_question_tokens))
+    topic_overlap = len(query_topics.intersection(memory_topics))
+    query_coverage = token_overlap / max(len(query_tokens), 1) if query_tokens else 0.0
+
+    normalized_query = " ".join(_tokenize(query_text))
+    normalized_question = " ".join(_tokenize(question_text))
+    phrase_similarity = 0.0
+    if normalized_query and normalized_question:
+        phrase_similarity = SequenceMatcher(None, normalized_query, normalized_question).ratio()
+    direct_phrase_match = bool(
+        normalized_query
+        and normalized_question
+        and (normalized_query in normalized_question or normalized_question in normalized_query)
+    )
+
+    is_strong_match = False
+    if direct_phrase_match and shared_raw_tokens >= 2:
+        is_strong_match = True
+    elif phrase_similarity >= 0.74 and shared_raw_tokens >= 2:
+        is_strong_match = True
+    elif query_topics:
+        if topic_overlap >= 1 and token_overlap >= 2 and query_coverage >= 0.45:
+            is_strong_match = True
+        elif topic_overlap >= 1 and phrase_similarity >= 0.58 and shared_raw_tokens >= 2:
+            is_strong_match = True
+        elif topic_overlap >= 2:
+            is_strong_match = True
+    else:
+        if token_overlap >= 3 and query_coverage >= 0.5:
+            is_strong_match = True
+
+    return {
+        "is_strong_match": is_strong_match,
+        "topic_overlap": topic_overlap,
+        "token_overlap": token_overlap,
+        "response_overlap": response_overlap,
+        "shared_raw_tokens": shared_raw_tokens,
+        "query_coverage": query_coverage,
+        "phrase_similarity": phrase_similarity,
+    }
+
+
+def _strip_markdown(value: str) -> str:
+    cleaned = re.sub(r"`([^`]+)`", r"\1", value or "")
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"\*([^*\n]+)\*", r"\1", cleaned)
+    cleaned = re.sub(r"~~([^~]+)~~", r"\1", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", cleaned)
+    return " ".join(cleaned.split())
+
+
+def _clean_summary_line(value: str) -> str:
+    cleaned = str(value or "").strip()
+    cleaned = re.sub(r"^#{1,6}\s*", "", cleaned)
+    cleaned = re.sub(r"^(?:[-*+]|\u2022)\s*", "", cleaned)
+    cleaned = re.sub(r"^\d+[\.\)]\s*", "", cleaned)
+    cleaned = cleaned.replace("|", " ")
+    return _strip_markdown(cleaned).strip(" -:")
+
+
+def _looks_like_heading(line: str) -> bool:
+    normalized = _clean_summary_line(line).lower()
+    return normalized in SUMMARY_SECTION_HINTS
+
+
+def _should_skip_summary_line(line: str) -> bool:
+    cleaned = _clean_summary_line(line)
+    if not cleaned:
+        return True
+    return any(pattern.match(cleaned) for pattern in FOLLOW_UP_SUMMARY_PATTERNS)
+
+
+def _summary_bullets_from_lines(lines: list[str], limit: int = 3) -> list[str]:
+    bullets: list[str] = []
+    for line in lines:
+        cleaned = _clean_summary_line(line)
+        if not cleaned or _should_skip_summary_line(cleaned):
+            continue
+        bullets.append(cleaned.rstrip(".") + ".")
+        if len(bullets) >= limit:
+            break
+    return bullets
+
+
+def _sentence_summary(text: str, limit: int = 3) -> list[str]:
+    normalized = _strip_markdown(text.replace("\n", " "))
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    bullets: list[str] = []
+    for part in parts:
+        cleaned = part.strip()
+        if not cleaned or cleaned.endswith("?") or _should_skip_summary_line(cleaned):
+            continue
+        bullets.append(cleaned)
+        if len(bullets) >= limit:
+            break
+    return bullets
+
+
+def _build_insight_summary(response: str) -> str:
+    if not str(response or "").strip():
+        return ""
+
+    lines = [line.rstrip() for line in str(response).replace("\r\n", "\n").split("\n")]
+
+    for index, line in enumerate(lines):
+        if not _looks_like_heading(line):
+            continue
+        section_lines: list[str] = []
+        for candidate in lines[index + 1:]:
+            stripped = candidate.strip()
+            if not stripped:
+                if section_lines:
+                    break
+                continue
+            if re.match(r"^#{1,6}\s+", stripped) and section_lines:
+                break
+            if _looks_like_heading(stripped) and section_lines:
+                break
+            section_lines.append(stripped)
+        bullets = _summary_bullets_from_lines(section_lines)
+        if bullets:
+            return "\n".join(f"- {bullet}" for bullet in bullets)
+
+    inline_bullets = [
+        line.strip()
+        for line in lines
+        if re.match(r"^(?:\s*(?:[-*+]|\u2022)\s+|\s*\d+[\.\)]\s+)", line or "")
+    ]
+    bullets = _summary_bullets_from_lines(inline_bullets)
+    if bullets:
+        return "\n".join(f"- {bullet}" for bullet in bullets)
+
+    sentence_bullets = _sentence_summary(str(response))
+    return "\n".join(f"- {bullet}" for bullet in sentence_bullets)
+
+
+def _row_value(row: sqlite3.Row | dict, key: str, default=None):
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
+def _row_insight_summary(row: sqlite3.Row | dict) -> str:
+    summary = str(_row_value(row, "insight_summary") or "").strip()
+    if summary:
+        return summary
+    return _build_insight_summary(str(_row_value(row, "response") or ""))
+
+
 class ContextStore:
     def __init__(self, db_path: str = CONTEXT_DB_PATH):
         self.db_path = db_path
@@ -118,6 +340,7 @@ class ContextStore:
             )
             self._ensure_column(conn, "conversation_memory", "feedback_score", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "conversation_memory", "feedback_updated_at", "TEXT")
+            self._ensure_column(conn, "conversation_memory", "insight_summary", "TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS context_documents (
@@ -226,22 +449,24 @@ class ContextStore:
         ]
 
     def remember(self, user_email: str, question: str, response: str) -> int | None:
+        insight_summary = _build_insight_summary(response)
         try:
             with self._get_connection() as conn:
-                # Enforce retention policy: delete old memories
-                cutoff = (
-                    datetime.now(timezone.utc) - timedelta(days=MEMORY_RETENTION_DAYS)
-                ).isoformat()
-                conn.execute(
-                    "DELETE FROM conversation_memory WHERE created_at < ?",
-                    (cutoff,),
-                )
+                # Enforce retention policy only when auto-cleanup is enabled.
+                if MEMORY_RETENTION_DAYS > 0:
+                    cutoff = (
+                        datetime.now(timezone.utc) - timedelta(days=MEMORY_RETENTION_DAYS)
+                    ).isoformat()
+                    conn.execute(
+                        "DELETE FROM conversation_memory WHERE created_at < ?",
+                        (cutoff,),
+                    )
                 cursor = conn.execute(
                     """
-                    INSERT INTO conversation_memory (user_email, question, response, created_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO conversation_memory (user_email, question, response, created_at, insight_summary)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (user_email, question, response, _utc_now()),
+                    (user_email, question, response, _utc_now(), insight_summary),
                 )
                 conn.commit()
                 return int(cursor.lastrowid)
@@ -253,7 +478,7 @@ class ContextStore:
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, question, response, created_at, feedback_score
+                SELECT id, question, response, created_at, feedback_score, insight_summary
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -268,6 +493,7 @@ class ContextStore:
                 "response": row["response"],
                 "created_at": row["created_at"],
                 "feedback_score": row["feedback_score"],
+                "insight_summary": _row_insight_summary(row),
             }
             for row in rows
         ]
@@ -276,7 +502,7 @@ class ContextStore:
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, question, created_at, feedback_score
+                SELECT id, question, response, created_at, feedback_score, insight_summary
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -288,8 +514,10 @@ class ContextStore:
             {
                 "memory_id": row["id"],
                 "question": row["question"],
+                "response": row["response"],
                 "created_at": row["created_at"],
                 "feedback_score": row["feedback_score"],
+                "insight_summary": _row_insight_summary(row),
             }
             for row in rows
         ]
@@ -324,6 +552,41 @@ class ContextStore:
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
                     "topics": _topic_labels(inferred_metrics),
+                    "insight_summary": str(item.get("insight_summary") or "").strip(),
+                }
+            )
+            if len(items) >= limit:
+                break
+
+        return items
+
+    def past_questions_for_sidebar(
+        self,
+        user_email: str,
+        limit: int = 50,
+        allowed_metrics: list[str] | None = None,
+    ) -> list[dict]:
+        questions = self.recent_questions(user_email, limit=max(limit, 1))
+        items: list[dict] = []
+
+        for item in questions:
+            question = str(item.get("question", "") or "").strip()
+            response = str(item.get("response", "") or "").strip()
+            if not question:
+                continue
+
+            inferred_metrics = _extract_metrics(f"{question} {response}")
+            if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
+                continue
+
+            items.append(
+                {
+                    "memory_id": item.get("memory_id"),
+                    "question": question,
+                    "created_at": item.get("created_at"),
+                    "feedback_score": item.get("feedback_score", 0),
+                    "topics": _topic_labels(inferred_metrics),
+                    "insight_summary": str(item.get("insight_summary") or "").strip(),
                 }
             )
             if len(items) >= limit:
@@ -338,6 +601,7 @@ class ContextStore:
         limit: int = 5,
         min_feedback: int | None = None,
         exclude_memory_ids: set[int] | None = None,
+        require_strong_match: bool = False,
     ) -> list[dict]:
         tokens = _tokenize(query)
         exclude_memory_ids = exclude_memory_ids or set()
@@ -347,7 +611,7 @@ class ContextStore:
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, question, response, created_at, feedback_score
+                SELECT id, question, response, created_at, feedback_score, insight_summary
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -376,6 +640,9 @@ class ContextStore:
             question_tokens = set(_tokenize(question_text))
             response_tokens = set(_tokenize(response_text))
             memory_topics = _extract_metrics(f"{question_text} {response_text}")
+            match_details = _memory_match_details(query, question_text, response_text)
+            if require_strong_match and not bool(match_details["is_strong_match"]):
+                continue
 
             score = 0.0
             if not tokens and not query_topics:
@@ -392,6 +659,10 @@ class ContextStore:
                     score += 6 * topic_overlap
                 if score <= 0:
                     continue
+            score += 8 * float(match_details["phrase_similarity"])
+            score += 4 * float(match_details["query_coverage"])
+            if bool(match_details["is_strong_match"]):
+                score += 6
 
             if feedback_score > 0:
                 score += 3 * feedback_score
@@ -406,6 +677,8 @@ class ContextStore:
                         "response": response_text,
                         "created_at": row["created_at"],
                         "feedback_score": feedback_score,
+                        "insight_summary": _row_insight_summary(row),
+                        "is_strong_match": bool(match_details["is_strong_match"]),
                     },
                 )
             )
@@ -425,7 +698,12 @@ class ContextStore:
 
         deduped: list[dict] = []
         seen: set[str] = set()
-        for item in self.search_memories(user_email, query, limit=max(limit * 3, 12)):
+        for item in self.search_memories(
+            user_email,
+            query,
+            limit=max(limit * 3, 12),
+            require_strong_match=True,
+        ):
             question = item.get("question", "")
             response = item.get("response", "")
             inferred_metrics = _extract_metrics(f"{question} {response}")
@@ -443,6 +721,7 @@ class ContextStore:
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
                     "topics": _topic_labels(inferred_metrics),
+                    "insight_summary": str(item.get("insight_summary") or "").strip(),
                 }
             )
             if len(deduped) >= limit:
@@ -458,7 +737,7 @@ class ContextStore:
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, question, response, created_at, feedback_score
+                SELECT id, question, response, created_at, feedback_score, insight_summary
                 FROM conversation_memory
                 WHERE user_email = ?
                 ORDER BY id DESC
@@ -503,6 +782,7 @@ class ContextStore:
                             "created_at": row["created_at"],
                             "feedback_score": feedback_score,
                             "topics": _topic_labels(inferred_metrics),
+                            "insight_summary": _row_insight_summary(row),
                         },
                     )
                 )
@@ -544,6 +824,52 @@ class ContextStore:
             "favorite_questions": ranked_questions,
         }
 
+    def get_memory(
+        self,
+        user_email: str,
+        memory_id: int,
+        allowed_metrics: list[str] | None = None,
+    ) -> dict | None:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, question, response, created_at, feedback_score, insight_summary
+                FROM conversation_memory
+                WHERE id = ? AND user_email = ?
+                """,
+                (memory_id, user_email),
+            ).fetchone()
+            if row is None:
+                return None
+
+            question = str(row["question"] or "").strip()
+            response = str(row["response"] or "").strip()
+            inferred_metrics = _extract_metrics(f"{question} {response}")
+            if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
+                return None
+
+            insight_summary = _row_insight_summary(row)
+            if insight_summary and not str(row["insight_summary"] or "").strip():
+                conn.execute(
+                    """
+                    UPDATE conversation_memory
+                    SET insight_summary = ?
+                    WHERE id = ? AND user_email = ?
+                    """,
+                    (insight_summary, memory_id, user_email),
+                )
+                conn.commit()
+
+        return {
+            "memory_id": row["id"],
+            "question": question,
+            "response": response,
+            "created_at": row["created_at"],
+            "feedback_score": int(row["feedback_score"] or 0),
+            "topics": _topic_labels(inferred_metrics),
+            "insight_summary": insight_summary,
+        }
+
     def record_feedback(self, user_email: str, memory_id: int, vote: str) -> dict | None:
         normalized_vote = str(vote or "").strip().lower()
         feedback_score = 1 if normalized_vote in {"up", "yes"} else -1 if normalized_vote in {"down", "no"} else 0
@@ -565,7 +891,7 @@ class ContextStore:
 
                 row = conn.execute(
                     """
-                    SELECT id, question, response, created_at, feedback_score
+                    SELECT id, question, response, created_at, feedback_score, insight_summary
                     FROM conversation_memory
                     WHERE id = ? AND user_email = ?
                     """,
@@ -585,6 +911,7 @@ class ContextStore:
             "response": row["response"],
             "created_at": row["created_at"],
             "feedback_score": row["feedback_score"],
+            "insight_summary": _row_insight_summary(row),
         }
 
     def search_documents(self, query: str, allowed_tags: list[str], limit: int = 3) -> list[dict]:

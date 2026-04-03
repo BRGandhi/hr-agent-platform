@@ -220,6 +220,14 @@ class ChatRequest(BaseModel):
     table_context_rows: list[dict] = Field(default_factory=list)
 
 
+class RecallMemoryRequest(BaseModel):
+    api_key: str = ""
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""
+    session_id: str = ""
+
+
 class ResetRequest(BaseModel):
     session_id: str
 
@@ -259,7 +267,7 @@ def _cleanup_expired_items():
         _auth_sessions.pop(session_id, None)
 
 
-def _build_llm_config(req: ChatRequest) -> LLMConfig:
+def _build_llm_config(req) -> LLMConfig:
     browser_api_key = req.api_key.strip()
     provider = (req.provider or DEFAULT_PROVIDER).strip().lower()
     if provider == OPENAI_COMPAT_PROVIDER:
@@ -526,6 +534,11 @@ def get_recent_history(request: Request, query: str = "", limit: int = 8):
     profile = _current_access_profile(request)
     effective_limit = max(1, min(int(limit or 8), 12))
     summary = CONTEXT_STORE.history_summary(user["email"], allowed_metrics=profile.allowed_metrics)
+    past_questions = CONTEXT_STORE.past_questions_for_sidebar(
+        user["email"],
+        limit=50,
+        allowed_metrics=profile.allowed_metrics,
+    )
     if str(query or "").strip():
         questions = CONTEXT_STORE.relevant_questions(
             user["email"],
@@ -544,7 +557,38 @@ def get_recent_history(request: Request, query: str = "", limit: int = 8):
     return {
         "mode": mode,
         "questions": questions,
+        "past_questions": past_questions,
         **summary,
+    }
+
+
+@app.post("/api/memories/{memory_id}/recall")
+def recall_memory(memory_id: int, req: RecallMemoryRequest, request: Request):
+    user = _require_auth(request)
+    profile = _current_access_profile(request)
+    memory = CONTEXT_STORE.get_memory(
+        user["email"],
+        memory_id,
+        allowed_metrics=profile.allowed_metrics,
+    )
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Saved chat not found for this user.")
+
+    session_id = (req.session_id or "").strip() or str(uuid.uuid4())
+    agent = _get_or_create_session(session_id, _build_llm_config(req))
+    agent.prime_recalled_memory(memory.get("question", ""), memory.get("response", ""))
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "memory": {
+            "memory_id": memory["memory_id"],
+            "question": memory["question"],
+            "insight_summary": memory.get("insight_summary", ""),
+            "created_at": memory["created_at"],
+            "feedback_score": memory.get("feedback_score", 0),
+            "topics": memory.get("topics", []),
+        },
     }
 
 

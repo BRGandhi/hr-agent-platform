@@ -2,6 +2,38 @@
 
 This file records the major architectural changes and implementation milestones in the repository. It is intended to help future maintainers understand not only what changed, but why it changed.
 
+## v1.9 - Agentic Context Retrieval, Cached Recall, And Personalized Navigation
+
+Summary:
+- expanded the governed HR assistant into a richer agentic retrieval system that combines session context, long-term user memory, approved HR documents, and latest-table follow-up context
+- upgraded the sidebar and home-screen UX around favorite topics, favorite chats, relevant chats, and full past-chat history
+- introduced cached saved-chat recall so users can reopen prior work without rerunning the original question
+
+Key agent and memory changes:
+- the orchestrator now routes requests into distinct modes such as `data_query`, `report`, `policy`, `history_lookup`, and `visual_follow_up`
+- short replies such as `yes`, `job level`, and `show me` inherit prior HR context before access validation runs
+- the context store now saves `insight_summary` alongside the full assistant response
+- memory retrieval now supports strong-match relevance scoring based on topic overlap, wording similarity, and query coverage
+- relevant-history suggestions are intentionally stricter so the system avoids noisy broad-memory recommendations
+- saved chat recall now primes the live session with the original Q&A so follow-ups continue naturally
+
+Key UX and product changes:
+- the home screen now leads with platform capabilities, then a personalized KPI/prompt board
+- center-board cards were rebalanced for stronger hierarchy and more compact sizing
+- the sidebar now separates favorite topics, favorite chats, relevant chats, and past chats into collapsible sections
+- `Past Chats` now reads from dedicated full-history data rather than a small recent/relevant subset
+- clicking favorite/relevant/past chats now recalls the stored insight summary instead of rerunning the question
+
+Data and documentation outcomes:
+- conversation memory is retained indefinitely by default unless retention is explicitly configured
+- README, architecture, and data-dictionary docs now describe the agentic retrieval, context, and recall layers in more operational detail
+- the project documentation now better explains how `context_store.db` functions as both prompt memory and recall cache
+
+Why this mattered:
+- reopening prior work should feel instantaneous and contextual, not like a duplicate fresh query
+- history suggestions must be high-signal to improve trust rather than clutter the workspace
+- the repo needed clearer documentation of the data, memory, and recall architecture as the product moved from simple memory to a more intentional agentic context layer
+
 ## v1.8 - Memory-Aware Agent UX, Visualization Controls, And Report Export
 
 Summary:
