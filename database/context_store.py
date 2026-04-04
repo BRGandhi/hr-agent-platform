@@ -103,13 +103,21 @@ def _keyword_in_text(text: str, keyword: str) -> bool:
     if " " in normalized:
         return normalized in lowered
 
-    idx = lowered.find(normalized)
-    while idx != -1:
-        before_ok = idx == 0 or not lowered[idx - 1].isalpha()
-        after_ok = (idx + len(normalized) >= len(lowered)) or not lowered[idx + len(normalized)].isalpha()
-        if before_ok and after_ok:
-            return True
-        idx = lowered.find(normalized, idx + 1)
+    variants = [normalized]
+    if len(normalized) > 3:
+        if normalized.endswith("y"):
+            variants.append(f"{normalized[:-1]}ies")
+        elif not normalized.endswith("s"):
+            variants.append(f"{normalized}s")
+
+    for variant in variants:
+        idx = lowered.find(variant)
+        while idx != -1:
+            before_ok = idx == 0 or not lowered[idx - 1].isalpha()
+            after_ok = (idx + len(variant) >= len(lowered)) or not lowered[idx + len(variant)].isalpha()
+            if before_ok and after_ok:
+                return True
+            idx = lowered.find(variant, idx + 1)
     return False
 
 
@@ -146,6 +154,26 @@ def _topic_labels(metrics: set[str], *, kpi_only: bool = False) -> list[str]:
             continue
         ordered.append(TOPIC_LABELS[metric])
     return ordered
+
+
+def _history_metrics(question: str, response: str = "", insight_summary: str = "") -> set[str]:
+    question_metrics = _extract_metrics(str(question or ""))
+    if question_metrics:
+        return question_metrics
+
+    summary_text = str(insight_summary or "").strip()
+    if summary_text:
+        summary_metrics = _extract_metrics(summary_text)
+        if summary_metrics:
+            return summary_metrics
+
+    response_summary = _build_insight_summary(str(response or ""))
+    if response_summary:
+        response_summary_metrics = _extract_metrics(response_summary)
+        if response_summary_metrics:
+            return response_summary_metrics
+
+    return _extract_metrics(str(response or ""))
 
 
 def _memory_match_details(query: str, question: str, response: str) -> dict[str, float | int | bool]:
@@ -534,10 +562,12 @@ class ContextStore:
 
         for item in questions:
             question = str(item.get("question", "") or "").strip()
+            response = str(item.get("response", "") or "").strip()
+            insight_summary = str(item.get("insight_summary") or "").strip()
             if not question:
                 continue
 
-            inferred_metrics = _extract_metrics(question)
+            inferred_metrics = _history_metrics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -552,7 +582,7 @@ class ContextStore:
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
                     "topics": _topic_labels(inferred_metrics),
-                    "insight_summary": str(item.get("insight_summary") or "").strip(),
+                    "insight_summary": insight_summary,
                 }
             )
             if len(items) >= limit:
@@ -572,10 +602,11 @@ class ContextStore:
         for item in questions:
             question = str(item.get("question", "") or "").strip()
             response = str(item.get("response", "") or "").strip()
+            insight_summary = str(item.get("insight_summary") or "").strip()
             if not question:
                 continue
 
-            inferred_metrics = _extract_metrics(f"{question} {response}")
+            inferred_metrics = _history_metrics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -586,7 +617,7 @@ class ContextStore:
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
                     "topics": _topic_labels(inferred_metrics),
-                    "insight_summary": str(item.get("insight_summary") or "").strip(),
+                    "insight_summary": insight_summary,
                 }
             )
             if len(items) >= limit:
@@ -706,7 +737,8 @@ class ContextStore:
         ):
             question = item.get("question", "")
             response = item.get("response", "")
-            inferred_metrics = _extract_metrics(f"{question} {response}")
+            insight_summary = str(item.get("insight_summary") or "").strip()
+            inferred_metrics = _history_metrics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -721,7 +753,7 @@ class ContextStore:
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
                     "topics": _topic_labels(inferred_metrics),
-                    "insight_summary": str(item.get("insight_summary") or "").strip(),
+                    "insight_summary": insight_summary,
                 }
             )
             if len(deduped) >= limit:
@@ -755,7 +787,8 @@ class ContextStore:
             question = row["question"] or ""
             response = row["response"] or ""
             feedback_score = int(row["feedback_score"] or 0)
-            inferred_metrics = _extract_metrics(f"{question} {response}")
+            insight_summary = _row_insight_summary(row)
+            inferred_metrics = _history_metrics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -782,7 +815,7 @@ class ContextStore:
                             "created_at": row["created_at"],
                             "feedback_score": feedback_score,
                             "topics": _topic_labels(inferred_metrics),
-                            "insight_summary": _row_insight_summary(row),
+                            "insight_summary": insight_summary,
                         },
                     )
                 )
@@ -844,11 +877,11 @@ class ContextStore:
 
             question = str(row["question"] or "").strip()
             response = str(row["response"] or "").strip()
-            inferred_metrics = _extract_metrics(f"{question} {response}")
+            insight_summary = _row_insight_summary(row)
+            inferred_metrics = _history_metrics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 return None
 
-            insight_summary = _row_insight_summary(row)
             if insight_summary and not str(row["insight_summary"] or "").strip():
                 conn.execute(
                     """

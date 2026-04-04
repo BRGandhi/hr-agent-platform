@@ -135,6 +135,58 @@ class ContextStorePersonalizationTests(unittest.TestCase):
         self.assertEqual(results[1]["question"], "What is the current headcount for Business Units?")
         self.assertEqual(results[2]["question"], "What is the current headcount for Business Units?")
 
+    def test_sidebar_topics_prefer_question_topic_over_response_mentions(self):
+        self.store.remember(
+            self.user_email,
+            "Generate an attrition report for Business Units",
+            (
+                "Attrition is 16.1% across the business units.\n"
+                "The current headcount is 1,470 and active headcount is 1,233."
+            ),
+        )
+
+        results = self.store.past_questions_for_sidebar(
+            self.user_email,
+            limit=10,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["topics"], ["Attrition rate"])
+
+    def test_history_summary_topics_prefer_question_topic_over_response_mentions(self):
+        self.store.remember(
+            self.user_email,
+            "Can you overlay the demographic information on this breakdown?",
+            (
+                "Here is the demographic mix.\n"
+                "The underlying headcount remains 1,470 employees."
+            ),
+        )
+
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["headcount", "demographics"],
+        )
+
+        self.assertEqual(summary["favorite_questions"][0]["topics"], ["Demographic mix"])
+
+    def test_sidebar_topics_match_plural_question_terms_before_summary_fallback(self):
+        self.store.remember(
+            self.user_email,
+            "Show employees with recent promotions in Business Units",
+            "Attrition is 16.1%, but this answer is mainly about promotion activity.",
+        )
+
+        results = self.store.past_questions_for_sidebar(
+            self.user_email,
+            limit=10,
+            allowed_metrics=["attrition", "tenure"],
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["topics"], ["Tenure mix"])
+
     def test_remember_does_not_purge_when_retention_is_disabled(self):
         with self.store._get_connection() as conn:
             conn.execute(

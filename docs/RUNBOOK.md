@@ -89,7 +89,7 @@ Expected:
 1. Open the UI
 2. Sign in with a demo provider
 3. Confirm the KPI strip loads
-4. Ask a scoped HR question
+4. Ask an HR question aligned to the signed-in user's access
 5. Generate a standard report and confirm the table shows `Download Excel`
 6. Generate a small aggregate table and confirm `Visual options` appears only there
 7. Ask an out-of-scope question and confirm refusal
@@ -110,6 +110,11 @@ If `hr_data.db` is missing, rebuild it with:
 ```bash
 python setup_db.py
 ```
+
+Deployment note:
+- Docker deployments are expected to ship with a bundled `hr_data.db`
+- if a containerized deployment fails with `HR database not available`, verify `hr_data.db` is committed into the repo and present in the image build context
+- the Dockerfile now validates the database during image build so missing-data failures surface earlier
 
 ## 6. Logging
 
@@ -192,7 +197,7 @@ PY
 
 ### 8.1 `hr_data.db` missing
 Symptoms:
-- scoped KPI strip fails
+- KPI board fails to load
 - queries do not work
 
 Fix:

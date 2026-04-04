@@ -1,6 +1,6 @@
 /**
  * HR Intelligence Platform frontend.
- * Enforces the auth shell, scope-aware UX, and banner-based LLM connection flow.
+ * Enforces the auth shell, role-aware UX, and banner-based LLM connection flow.
  *
  * Security notes:
  * - API keys can be provided in the UI for the current browser session
@@ -10,9 +10,9 @@
 
 const DEFAULT_SIDEBAR_SECTIONS = {
   topics: false,
-  favorites: false,
-  relevant: false,
-  past: false,
+  favorites: true,
+  relevant: true,
+  past: true,
 };
 
 function loadSidebarSections() {
@@ -50,7 +50,9 @@ const state = {
     favoriteKpis: [],
     favoriteQuestions: [],
   },
-  scopedPrompts: [],
+  relevantHistoryItems: [],
+  pastHistoryItems: [],
+  starterPrompts: [],
 };
 
 const LEGACY_OPENAI_COMPAT_MODEL = "llama3.1:8b";
@@ -417,7 +419,7 @@ async function loadAccessSummary() {
     state.accessProfile = payload.access_profile || null;
     syncAuthUi();
     syncScopeUi();
-    renderScopedPrompts();
+    renderStarterPrompts();
     updateTopbarSub();
     return true;
   } catch (error) {
@@ -533,7 +535,7 @@ async function loadStats() {
     state.accessProfile = stats.access_profile || state.accessProfile;
     syncAuthUi();
     syncScopeUi();
-    renderScopedPrompts();
+    renderStarterPrompts();
     updateTopbarSub();
 
     dbStatus.className = "status-pill ok";
@@ -598,7 +600,7 @@ function scopeSummaryCard(departments) {
   </div>`;
 }
 
-function renderScopedPrompts() {
+function renderStarterPrompts() {
   const profile = state.accessProfile;
   const scopeName = profile?.scope_name || "my business units";
   const departments = profile?.allowed_departments || [];
@@ -629,7 +631,7 @@ function renderScopedPrompts() {
   }
 
   const uniquePrompts = prompts.slice(0, 5);
-  state.scopedPrompts = uniquePrompts;
+  state.starterPrompts = uniquePrompts;
   renderDiveBackIn();
   renderMetricExamples(profile);
 }
@@ -728,6 +730,12 @@ function filterHistoryItemsByTopic(items, topic) {
   });
 }
 
+function getActiveSidebarTopic(topics = preferredTopicsFromHistory()) {
+  const activeTopic = topics.includes(state.activeDiveTopic) ? state.activeDiveTopic : "";
+  state.activeDiveTopic = activeTopic;
+  return activeTopic;
+}
+
 function renderMemoryButtons(container, className, items) {
   if (!container) return;
   container.innerHTML = items.map((item) => {
@@ -751,8 +759,7 @@ function renderMemoryButtons(container, className, items) {
 function renderDiveBackIn() {
   const topics = preferredTopicsFromHistory();
   const favoriteQuestionItems = preferredQuestionItemsFromHistory();
-  const activeTopic = topics.includes(state.activeDiveTopic) ? state.activeDiveTopic : "";
-  state.activeDiveTopic = activeTopic;
+  const activeTopic = getActiveSidebarTopic(topics);
 
   if (favoriteTopicsEl) {
     favoriteTopicsEl.innerHTML = topics.length ? topics.map((topic) => `
@@ -768,7 +775,7 @@ function renderDiveBackIn() {
   const filteredItems = activeTopic
     ? filterHistoryItemsByTopic(favoriteQuestionItems, activeTopic)
     : favoriteQuestionItems;
-  const questionItems = filteredItems.length ? filteredItems : favoriteQuestionItems;
+  const questionItems = filteredItems;
 
   if (favoriteChatsCaption) {
     favoriteChatsCaption.textContent = activeTopic
@@ -778,7 +785,9 @@ function renderDiveBackIn() {
 
   if (!questionItems.length) {
     if (examplesEl) {
-      examplesEl.innerHTML = '<div class="history-empty">Questions you revisit or rate helpful will appear here.</div>';
+      examplesEl.innerHTML = activeTopic
+        ? `<div class="history-empty">No favorite chats saved for ${escHtml(activeTopic)} yet.</div>`
+        : '<div class="history-empty">Questions you revisit or rate helpful will appear here.</div>';
     }
   } else {
     renderMemoryButtons(
@@ -788,6 +797,8 @@ function renderDiveBackIn() {
     );
   }
 
+  renderRelevantHistory(state.relevantHistoryItems, activeTopic);
+  renderPastHistory(state.pastHistoryItems, activeTopic);
   renderCenterKpiBoard();
 }
 
@@ -2658,6 +2669,8 @@ function resetConversationUi() {
   state.activeTopic = "";
   state.activeDiveTopic = "";
   state.activeTopbarPanel = "";
+  state.relevantHistoryItems = [];
+  state.pastHistoryItems = [];
   metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => chip.classList.remove("active"));
   clearTopicSuggestions();
   closeTopbarReveal();
@@ -2678,6 +2691,8 @@ function handleUnauthorized() {
   state.activeDiveTopic = "";
   state.activeTopbarPanel = "";
   state.historySummary = { favoriteTopics: [], favoriteKpis: [], favoriteQuestions: [] };
+  state.relevantHistoryItems = [];
+  state.pastHistoryItems = [];
   clearTopicSuggestions();
   syncAuthUi();
   syncScopeUi();
@@ -2769,33 +2784,55 @@ function buildRelevantChatItems(personalizedItems = [], pastItems = []) {
   const relevantItems = scoredItems
     .filter((entry) => entry.score > 0)
     .map((entry) => entry.item)
-    .slice(0, 6);
+    .slice(0, 20);
 
   return relevantItems;
 }
 
-function renderRelevantHistory(questions) {
+function renderRelevantHistory(questions, activeTopic = getActiveSidebarTopic()) {
+  const filteredQuestions = activeTopic
+    ? filterHistoryItemsByTopic(questions, activeTopic)
+    : questions;
+
   if (relevantHistoryCaption) {
-    relevantHistoryCaption.textContent = "Questions closely aligned to your role and the HR themes you revisit most.";
+    relevantHistoryCaption.textContent = activeTopic
+      ? `Relevant chats related to ${activeTopic}.`
+      : "Questions closely aligned to your role and the HR themes you revisit most.";
   }
   if (!relevantHistoryList) return;
-  if (!questions.length) {
-    renderHistoryState(relevantHistoryList, "Ask a few more HR questions and this list will sharpen.");
+  if (!filteredQuestions.length) {
+    renderHistoryState(
+      relevantHistoryList,
+      activeTopic
+        ? `No relevant chats found for ${activeTopic} yet.`
+        : "Ask a few more HR questions and this list will sharpen.",
+    );
     return;
   }
-  renderHistoryItems(relevantHistoryList, questions);
+  renderHistoryItems(relevantHistoryList, filteredQuestions.slice(0, 6));
 }
 
-function renderPastHistory(questions) {
+function renderPastHistory(questions, activeTopic = getActiveSidebarTopic()) {
+  const filteredQuestions = activeTopic
+    ? filterHistoryItemsByTopic(questions, activeTopic)
+    : questions;
+
   if (pastHistoryCaption) {
-    pastHistoryCaption.textContent = "Questions asked across all prior sessions.";
+    pastHistoryCaption.textContent = activeTopic
+      ? `Past chats related to ${activeTopic} across prior sessions.`
+      : "Questions asked across all prior sessions.";
   }
   if (!pastHistoryList) return;
-  if (!questions.length) {
-    renderHistoryState(pastHistoryList, "No prior HR questions yet.");
+  if (!filteredQuestions.length) {
+    renderHistoryState(
+      pastHistoryList,
+      activeTopic
+        ? `No past chats found for ${activeTopic} yet.`
+        : "No prior HR questions yet.",
+    );
     return;
   }
-  renderHistoryItems(pastHistoryList, questions);
+  renderHistoryItems(pastHistoryList, filteredQuestions);
 }
 
 async function fetchHistoryPayload(query = "", limit = 8) {
@@ -2850,12 +2887,14 @@ async function loadHistory() {
       pastQuestions,
     );
 
+    state.relevantHistoryItems = relevantQuestions;
+    state.pastHistoryItems = pastQuestions;
     renderDiveBackIn();
     updateTopbarSub();
-    renderRelevantHistory(relevantQuestions);
-    renderPastHistory(pastQuestions);
   } catch (error) {
     if (requestToken !== state.historyRequestToken) return;
+    state.relevantHistoryItems = [];
+    state.pastHistoryItems = [];
     renderHistoryState(relevantHistoryList, error.message || "Could not load history");
     renderHistoryState(pastHistoryList, error.message || "Could not load history");
   }

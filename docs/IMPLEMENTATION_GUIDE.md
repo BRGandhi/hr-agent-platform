@@ -14,7 +14,7 @@ When you run this repo, you are standing up:
 - a web UI for HR-only analytics
 - a FastAPI backend that streams results over SSE
 - a governed tool-using agent
-- a scoped HR dataset
+- an approved HR analytics dataset
 - an access-control store linked to the authenticated user email
 - a memory/context store for prior questions and policy documents
 
@@ -27,7 +27,7 @@ At a minimum, understand these files before modifying the platform:
 ### Top-level
 - [README.md](README.md): overview and repo map
 - [server.py](server.py): main backend entry point
-- [setup_db.py](setup_db.py): builds `hr_data.db`
+- [setup_db.py](setup_db.py): optional helper to rebuild `hr_data.db`
 - [config.py](config.py): environment-driven runtime configuration
 
 ### Agent
@@ -142,26 +142,17 @@ DEV_SSO_ENABLED=true
 
 ## 6. Prepare The HR Dataset
 
-The repo expects the IBM HR CSV used by [setup_db.py](setup_db.py).
+The repo includes a bundled `hr_data.db`, so a fresh clone can run immediately without rebuilding the demo database.
 
-By default, [config.py](config.py) expects the CSV one directory above the repo:
-
-```python
-CSV_PATH = str(Path(__file__).parent.parent / "WA_Fn-UseC_-HR-Employee-Attrition.csv")
-```
-
-### Steps
-1. Download the CSV.
-2. Place it at the configured path.
-3. Run:
+Only rebuild the dataset if you want to refresh or replace the demo data source:
 
 ```bash
 python setup_db.py
 ```
 
-This creates:
+That rebuilds:
 - `hr_data.db`
-- `employees` table with the HR analytics dataset
+- the `employees` table with the HR analytics dataset
 
 The first application run will also create:
 - `access_control.db`
@@ -190,8 +181,8 @@ After starting the server, validate the following:
 - logging in as Microsoft resolves to a Technology manager
 - logging in as Google resolves to an HR Business Partner
 
-### 8.3 Access-scoped UI
-- top KPI cards reflect the signed-in scope
+### 8.3 Role-filtered UI
+- top KPI cards reflect the signed-in business coverage
 - example prompts change based on access
 - topic chips under the welcome state expand into related sample questions when clicked
 - previous questions appear in the sidebar after asking a question
@@ -205,8 +196,8 @@ After starting the server, validate the following:
 
 ### 8.5 Chat safety behavior
 Try these prompts:
-- `What is the attrition rate for my scope?`
-- `Generate an active headcount report for my scope`
+- `What is the attrition rate for Business Units?`
+- `Generate an active headcount report for Business Units`
 - `Write me a poem about Mars`
 
 Expected behavior:
@@ -264,7 +255,9 @@ Important:
 
 ### 10.3 Prepare the database
 
-Place the CSV and run:
+The repo should already contain the bundled `hr_data.db`.
+
+Only rebuild it if you are intentionally replacing the demo dataset:
 
 ```bash
 source .venv/bin/activate
@@ -386,7 +379,7 @@ Extend [agent/llm_client.py](agent/llm_client.py) with:
 
 If you are coming fresh to the project, do these in order:
 1. Clone and run the app locally.
-2. Sign in with each demo provider and observe the scoped differences.
+2. Sign in with each demo provider and observe the role-based access differences.
 3. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 4. Read [database/access_control.py](database/access_control.py) and [database/context_store.py](database/context_store.py).
 5. Trace a single request through [server.py](server.py), [agent/orchestrator.py](agent/orchestrator.py), and [agent/tool_executor.py](agent/tool_executor.py).

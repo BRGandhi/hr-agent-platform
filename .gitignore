@@ -2,7 +2,6 @@
 .env
 
 # Generated database (rebuild with: python setup_db.py)
-hr_data.db
 access_control.db
 context_store.db
 *.stdout.log
@@ -11,11 +10,16 @@ context_store.db
 # Source data CSV (download separately — see README for link)
 *.csv
 
+# The primary demo HR dataset is intentionally versioned so container deployments
+# can boot without a local setup step.
+!hr_data.db
+
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.codex_test_*/
 tests/codex_test_*/
 .Python
 *.egg-info/

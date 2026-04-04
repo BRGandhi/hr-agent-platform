@@ -1,6 +1,6 @@
 # HR Insights Platform
 
-The HR Insights Platform is a governed HR analytics assistant designed to answer workforce questions, generate scoped reports, and visualize approved HR data through a controlled tool-using agent. The repository is intended as an internal-tooling foundation that can be adapted for a bank or other regulated enterprise environment.
+The HR Insights Platform is a governed HR analytics assistant designed to answer workforce questions, generate reports, and visualize approved HR data through a controlled tool-using agent. The repository is intended as an internal-tooling foundation that can be adapted for a bank or other regulated enterprise environment.
 
 This repo currently combines:
 - a FastAPI backend and vanilla JS web frontend
@@ -15,7 +15,7 @@ This codebase is aimed at a common internal-bank problem: teams want self-servic
 - HR-only scope
 - department and metric level access controls
 - traceable tool calls
-- scoped metrics and reports
+- approved workforce measures and reports
 - configurable model providers
 
 In other words, this is not a generic chat app. It is a governed HR analytics copilot pattern.
@@ -29,7 +29,7 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 ### 2. Role-based access control
 - Access is resolved from the signed-in user email through `access_control.db`.
 - Each user receives a role, scope name, allowed departments, allowed metric domains, and allowed document tags.
-- SQL is checked against restricted columns and automatically department-scoped before execution.
+- SQL is checked against restricted columns and automatically limited to the user's approved departments.
 
 ### 3. Context and memory layer
 - User-specific prior questions are stored in `context_store.db`.
@@ -42,8 +42,8 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - Clicking a saved favorite, relevant, or past chat now recalls the cached insight summary instead of rerunning the query.
 
 ### 4. Standard HR reports
-- The agent can generate a scoped active headcount report.
-- The agent can generate a scoped attrition report.
+- The agent can generate an active headcount report for the signed-in user's business units.
+- The agent can generate an attrition report for the signed-in user's business units.
 - The current demo dataset does not include real employee names, so employee-level reports use `EmployeeNumber`-derived labels.
 
 ### 5. LLM-agnostic orchestration
@@ -68,7 +68,7 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - Assistant responses include `Yes` / `No` helpfulness controls so teams can curate strong examples over time.
 
 ### 9. Personalized home screen and sidebar
-- The landing experience now leads with what the platform can do: generate reports, visualizations, and scoped HR insights.
+- The landing experience now leads with what the platform can do: generate reports, visualizations, and HR insights.
 - The center KPI board prioritizes headcount first, then surfaces KPI families the user has actually asked about before.
 - Prompt cards are phrased as concrete questions so the primary CTA is obvious instead of generic `Ask` / `Explore` labels.
 - The sidebar is organized around `Favorite Chats`, `Relevant Chats`, and `Past Chats`, with collapsible sections for faster navigation.
@@ -91,7 +91,7 @@ The newest generation of the agent is optimized around governed follow-up work i
 
 - Broader memory retrieval: the orchestrator now searches prior user interactions for relevant answers, not just the last few turns.
 - Helpful-answer reuse: positively rated responses can be surfaced when a later question looks similar.
-- Guided discovery UX: empty-state topic chips expand into sample scoped prompts so users can explore approved HR workflows faster.
+- Guided discovery UX: empty-state topic chips expand into sample starter prompts so users can explore approved HR workflows faster.
 - Table-aware visualization flow: when a user asks to turn a generated table into a chart, the latest table context is preserved and reused automatically.
 - Visualization gating: `Visual options` is now reserved for smaller aggregate tables that are actually chartable.
 - Report export flow: standard employee-level reports now favor `Download Excel` instead of a chart CTA.
@@ -181,7 +181,7 @@ This is the fastest path for someone new to the project.
   - Anthropic API key, or
   - any OpenAI-compatible endpoint, or
   - a local Ollama server
-- the IBM HR Attrition CSV used by `setup_db.py`
+- the bundled demo database, or the IBM HR Attrition CSV if you want to rebuild it with `setup_db.py`
 
 ### 1. Clone the repository
 
@@ -239,9 +239,9 @@ You can provide API keys either in `.env` or directly in the Connect LLM modal. 
 
 ### 5. Prepare the dataset
 
-Download the IBM HR dataset CSV and place it one folder above the repo, or update `CSV_PATH` in [config.py](config.py).
+The repo now includes a bundled `hr_data.db` so Docker-style deployments such as Render can boot without a separate database setup step.
 
-Then build the SQLite database:
+You only need the IBM HR dataset CSV if you want to rebuild the demo database locally:
 
 ```bash
 python setup_db.py
@@ -263,7 +263,7 @@ With the default dev SSO flow enabled, sign in using one of the seeded demo prov
 - Okta
 
 You should then see:
-- a scoped KPI strip
+- a personalized KPI board
 - role-aware example questions
 - clickable topic chips that expand into sample prompts
 - previously asked questions in the sidebar
@@ -277,7 +277,7 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 
 ### Runtime entry points
 - [server.py](server.py): FastAPI app and SSE backend
-- [setup_db.py](setup_db.py): CSV-to-SQLite loader
+- [setup_db.py](setup_db.py): optional CSV-to-SQLite rebuild helper
 
 ### Agent layer
 - [agent/llm_client.py](agent/llm_client.py): provider adapters
@@ -287,7 +287,7 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 - [agent/tools.py](agent/tools.py): tool schemas
 
 ### Data and policy layer
-- [database/connector.py](database/connector.py): scoped SQLite query layer
+- [database/connector.py](database/connector.py): role-filtered SQLite query layer
 - [database/access_control.py](database/access_control.py): role and scope resolution
 - [database/context_store.py](database/context_store.py): memory, insight summaries, recall metadata, and context docs
 - [database/schema.py](database/schema.py): schema prompt reference
@@ -338,9 +338,11 @@ Recommended practice for future updates:
 | `PORT` | `8000` | Backend port when using `server.py` or `uvicorn` |
 
 Runtime-created stores:
-- `hr_data.db`: employee analytics dataset
 - `access_control.db`: user-to-scope mapping
 - `context_store.db`: conversation memory and retrieved context docs
+
+Bundled in the repo for deployment:
+- `hr_data.db`: employee analytics dataset baked into the Docker image
 
 ## Production Reality Check
 
