@@ -16,6 +16,41 @@ HR_SCOPE_KEYWORDS = {
     "recruiting", "satisfaction", "engagement", "policy", "benefits", "leave", "overtime",
 }
 
+ACCESS_CAPABILITY_PHRASES = (
+    "what can i ask",
+    "what questions can i ask",
+    "what kinds of questions can i ask",
+    "what kind of questions can i ask",
+    "what can you answer",
+    "what can this platform answer",
+    "what data can i access",
+    "what data do i have access to",
+    "tell me about the data that i can access",
+    "tell me about the data i can access",
+    "which data can i access",
+    "what metrics can i request",
+    "what metrics can i ask for",
+    "which metrics can i request",
+    "which metrics can i ask for",
+    "which metrics do i have access to",
+    "what measures can i request",
+    "what measures can i ask for",
+    "what reports can you generate",
+    "what reports can i request",
+    "what charts can you create",
+    "what visuals can you create",
+    "how can i use this platform",
+    "how do i use this platform",
+    "how do i ask",
+    "how should i ask",
+    "how do i request",
+)
+
+ACCESS_CAPABILITY_OBJECTS = {
+    "data", "metric", "metrics", "measure", "measures", "report", "reports", "question", "questions",
+    "chart", "charts", "visual", "visuals", "visualization", "visualizations", "schema", "column", "columns",
+}
+
 METRIC_KEYWORDS = {
     "headcount": {"headcount", "hc", "employee count", "how many", "total employees", "org size"},
     "attrition": {"attrition", "turnover", "retention", "left", "leavers", "overtime", "risk"},
@@ -110,13 +145,39 @@ class AccessProfile:
             requested.add("headcount")
         return requested
 
+    def is_access_capability_question(self, question: str) -> bool:
+        normalized = " ".join((question or "").lower().split())
+        if not normalized:
+            return False
+
+        if any(phrase in normalized for phrase in ACCESS_CAPABILITY_PHRASES):
+            return True
+
+        asks_access_envelope = (
+            any(keyword in normalized for keyword in ("access", "allowed", "available", "supported"))
+            and any(keyword in normalized for keyword in ACCESS_CAPABILITY_OBJECTS)
+        )
+        asks_platform_usage = (
+            any(keyword in normalized for keyword in ("what", "which", "how"))
+            and any(keyword in normalized for keyword in ("ask", "request", "use", "supported", "available"))
+            and any(keyword in normalized for keyword in ("platform", "here", "data", "metric", "report", "question", "chart", "visual"))
+        )
+        asks_role_envelope = any(
+            phrase in normalized
+            for phrase in ("my role", "my access", "do i have access", "am i allowed", "what am i allowed")
+        )
+        return asks_access_envelope or asks_platform_usage or asks_role_envelope
+
     def is_hr_related_question(self, question: str) -> bool:
         lowered = question.lower()
-        return any(keyword in lowered for keyword in HR_SCOPE_KEYWORDS)
+        return self.is_access_capability_question(question) or any(keyword in lowered for keyword in HR_SCOPE_KEYWORDS)
 
     def can_access_question(self, question: str) -> tuple[bool, str]:
         if not self.is_hr_related_question(question):
             return False, "This platform only supports HR insights, workforce analytics, HR policies, and related people-data questions."
+
+        if self.is_access_capability_question(question):
+            return True, ""
 
         requested = self.requested_metrics_for_question(question)
         if self.full_access or not requested:

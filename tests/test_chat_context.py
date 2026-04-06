@@ -47,6 +47,18 @@ class ExplodingLLMClient:
         raise AssertionError("LLM should not be called when the runtime asks a clarifying question first.")
 
 
+class AccessCapabilityLLMClient:
+    def create_response(self, system_prompt: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+        return LLMResponse(
+            text=(
+                "You currently have access to headcount and attrition data for the Technology business area. "
+                "You can ask for HR questions about headcount, attrition, approved standard reports, and supported visuals."
+            ),
+            tool_calls=[],
+            stop_reason="end_turn",
+        )
+
+
 class ToolThenRateLimitLLMClient:
     def __init__(self):
         self.call_count = 0
@@ -87,6 +99,14 @@ class ChatContextTests(unittest.TestCase):
             allowed_departments=["Research & Development", "Sales", "Human Resources"],
             allowed_metrics=["headcount", "attrition", "tenure", "demographics", "satisfaction"],
             allowed_doc_tags=["policy"],
+        )
+        self.restricted_profile = AccessProfile(
+            email="tech-manager@hr-intelligence.local",
+            role="Technology Manager",
+            scope_name="Technology",
+            allowed_departments=["Research & Development"],
+            allowed_metrics=["headcount", "attrition"],
+            allowed_doc_tags=["hr", "access", "policy"],
         )
 
     def tearDown(self):
@@ -242,6 +262,41 @@ class ChatContextTests(unittest.TestCase):
             if line.strip().startswith("- ") and line.strip().endswith("?")
         ]
         self.assertEqual(len(bullet_questions), 2)
+
+    def test_access_envelope_question_is_allowed_even_without_metric_keyword_overlap(self):
+        allowed, reason = self.restricted_profile.can_access_question("Tell me about the data that I can access")
+
+        self.assertTrue(allowed, reason)
+
+    def test_access_question_about_restricted_metric_is_still_in_scope(self):
+        allowed, reason = self.restricted_profile.can_access_question("Do I have access to compensation data in this platform?")
+
+        self.assertTrue(allowed, reason)
+
+    def test_capability_question_routes_to_policy_context(self):
+        agent = self._make_agent()
+
+        route = agent._route_request("What metrics can I request in this platform?", None, self.restricted_profile)
+        _, _, _, context_documents, prefetched_route = agent._prefetch_context(
+            "What metrics can I request in this platform?",
+            self.restricted_profile,
+            None,
+        )
+
+        self.assertEqual(route, "policy")
+        self.assertEqual(prefetched_route, "policy")
+        self.assertTrue(any(doc["title"] == "Supported HR Insights Questions" for doc in context_documents))
+
+    def test_agent_answers_capability_question_without_out_of_scope_refusal(self):
+        agent = self._make_agent(llm_client=AccessCapabilityLLMClient())
+
+        events = list(agent.chat("What metrics can I request in this platform?", self.restricted_profile))
+
+        final_text = events[-1]["text"]
+        self.assertIn("headcount and attrition", final_text.lower())
+        self.assertIn("### Follow-up questions", final_text)
+        self.assertNotIn("This platform only supports HR insights", final_text)
+        self.assertNotIn("Out of scope for your role", final_text)
 
     def test_underspecified_report_request_triggers_clarifying_question_before_generation(self):
         agent = self._make_agent(llm_client=ExplodingLLMClient())

@@ -375,10 +375,17 @@ class HRAgent:
         context_summary = f" HR table context: {title}. Columns: {', '.join(columns[:12])}."
         return f"{message_for_checks}{context_summary}", follow_up_context
 
-    def _route_request(self, user_message: str, table_context: dict | None) -> str:
+    def _route_request(
+        self,
+        user_message: str,
+        table_context: dict | None,
+        access_profile: AccessProfile | None = None,
+    ) -> str:
         lowered = user_message.lower()
         if self._is_visualization_follow_up(user_message, table_context):
             return "visual_follow_up"
+        if access_profile and access_profile.is_access_capability_question(user_message):
+            return "policy"
         if any(keyword in lowered for keyword in HISTORY_LOOKUP_KEYWORDS):
             return "history_lookup"
         if any(keyword in lowered for keyword in DOCUMENT_LOOKUP_KEYWORDS):
@@ -456,7 +463,7 @@ class HRAgent:
         access_profile: AccessProfile,
         table_context: dict | None,
     ) -> tuple[list[dict], list[dict], list[dict], list[dict], str]:
-        route = self._route_request(user_message, table_context)
+        route = self._route_request(user_message, table_context, access_profile)
         recent_memory = self.context_store.recent_memory(access_profile.email, limit=MAX_RECENT_MEMORY)
         recent_memory_ids = {
             int(item["memory_id"])
@@ -520,7 +527,7 @@ class HRAgent:
             yield {"type": "final_text", "text": reason}
             return
 
-        route = self._route_request(access_check_message, active_table_context)
+        route = self._route_request(access_check_message, active_table_context, access_profile)
         clarification_text = self._clarification_prompt_for_request(access_check_message, route, access_profile)
         if clarification_text:
             self.conversation_history.append({"role": "user", "content": user_message})

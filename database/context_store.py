@@ -439,6 +439,16 @@ class ContextStore:
                 "tags": ["hr", "metrics", "calculations"],
             },
             {
+                "title": "Supported HR Insights Questions",
+                "content": (
+                    "Users can ask what HR data they can access, which metric domains are approved for their role, "
+                    "what reports or visualizations the platform supports, and how to phrase approved HR questions. "
+                    "These access-envelope questions are in scope even when they mention a restricted metric such as compensation "
+                    "or performance, because the platform should explain whether that metric is available without revealing restricted data."
+                ),
+                "tags": ["hr", "access", "policy"],
+            },
+            {
                 "title": "Database Schema Summary",
                 "content": HR_SCHEMA,
                 "tags": ["hr", "database", "schema"],
