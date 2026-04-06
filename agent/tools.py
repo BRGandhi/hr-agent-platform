@@ -116,7 +116,8 @@ TOOLS = [
             "Generate a polished Plotly chart specification from HR data. "
             "Use this when the user asks for a specific chart, graph, visualization, or plot. "
             "If the user refers to the latest generated table, data can be omitted and the runtime will use that table context. "
-            "Supported chart types: bar, horizontal_bar, stacked_bar, pie, donut, histogram, scatter, line, area, box. "
+            "Prefer executive-ready visuals that answer the user's exact question quickly, not novelty charts. "
+            "Supported chart types: bar, horizontal_bar, stacked_bar, pie, donut, histogram, scatter, line, area, box, heatmap. "
             "Returns a chart spec that the frontend will render automatically."
         ),
         "input_schema": {
@@ -124,7 +125,7 @@ TOOLS = [
             "properties": {
                 "chart_type": {
                     "type": "string",
-                    "enum": ["bar", "horizontal_bar", "stacked_bar", "pie", "donut", "histogram", "scatter", "line", "area", "box"],
+                    "enum": ["bar", "horizontal_bar", "stacked_bar", "pie", "donut", "histogram", "scatter", "line", "area", "box", "heatmap"],
                     "description": "Type of chart to create",
                 },
                 "data": {
@@ -147,6 +148,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Optional: column to use for color grouping",
                 },
+                "question": {
+                    "type": "string",
+                    "description": "Optional: the user's exact visualization request so the runtime can auto-pick more useful columns",
+                },
             },
             "required": ["chart_type", "title"],
         },
@@ -157,8 +162,10 @@ TOOLS = [
             "Analyze a generated HR table and return a few strong chart options with ready-to-render Plotly specs. "
             "Use this when the user asks to turn a table into a visual, asks for chart recommendations, "
             "or wants to compare multiple visualization options before choosing one. "
+            "Favor chart options that make the core workforce story obvious to an HR leader. "
             "Prefer this tool before create_visualization when the user says things like "
-            "'visualize this table', 'turn that into a chart', or 'give me a few chart options'."
+            "'visualize this table', 'turn that into a chart', or 'give me a few chart options'. "
+            "Pass the user's exact question in the `question` field whenever possible so the recommendations are more targeted."
         ),
         "input_schema": {
             "type": "object",

@@ -10,6 +10,7 @@ import re
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 
 from database.access_control import AccessProfile
 from database.connector import HRDatabase
@@ -19,7 +20,14 @@ from utils.safety import validate_sql
 logger = logging.getLogger("hr_platform.tools")
 
 # Chart color palette
-CHART_PALETTE = ["#0050A0", "#2D6FA3", "#4D8FD1", "#F59E0B", "#D22630", "#6D839B"]
+CHART_PALETTE = ["#0B5CAB", "#1E88E5", "#3AA0D8", "#0F766E", "#E67E22", "#C0392B", "#6B7280"]
+HEATMAP_COLOR_SCALE = [
+    [0.0, "#EFF6FF"],
+    [0.22, "#BFDBFE"],
+    [0.48, "#60A5FA"],
+    [0.74, "#2563EB"],
+    [1.0, "#0B3A75"],
+]
 MEASURE_KEYWORDS = (
     "count",
     "total",
@@ -59,6 +67,10 @@ CATEGORY_PRIORITY = (
     "performance",
     "stockoptionlevel",
 )
+PERCENT_VALUE_KEYWORDS = ("rate", "pct", "percent", "share")
+CURRENCY_VALUE_KEYWORDS = ("income", "salary", "pay", "cost", "amount", "compensation")
+YEARS_VALUE_KEYWORDS = ("tenure", "years", "promotion", "experience")
+COUNT_VALUE_KEYWORDS = ("count", "total", "employees", "employeecount", "headcount", "attrited", "affected")
 
 
 class ToolExecutor:
@@ -233,24 +245,35 @@ class ToolExecutor:
         y_col = str(inputs.get("y_column", "") or "").strip()
         title = str(inputs.get("title", "") or "").strip() or "HR Chart"
         color_col = str(inputs.get("color_column", "") or "").strip() or None
+        question = str(inputs.get("question", "") or "").strip()
 
         rows, resolved_title_or_error = self._resolve_visualization_rows(inputs, table_context)
         if rows is None:
             return json.dumps({"error": resolved_title_or_error})
 
         df = self._prepare_visualization_dataframe(rows)
+        analysis_context = question or title or resolved_title_or_error
 
-        if not x_col and chart_type == "histogram":
-            x_col = self._choose_metric_column(df, "")
+        if chart_type == "heatmap":
+            if not x_col:
+                x_col = self._choose_dimension_column(df, analysis_context)
+            if not y_col:
+                y_col = self._choose_dimension_column(df, analysis_context, exclude={x_col} if x_col else None)
+            if not color_col:
+                color_col = self._choose_metric_column(df, analysis_context)
+        elif not x_col and chart_type == "histogram":
+            x_col = self._choose_metric_column(df, analysis_context)
         elif not x_col:
-            x_col = self._choose_dimension_column(df, "")
+            x_col = self._choose_dimension_column(df, analysis_context)
 
         if not y_col and chart_type in {"bar", "horizontal_bar", "stacked_bar", "pie", "donut", "line", "area", "box"}:
-            y_col = self._choose_metric_column(df, "")
+            y_col = self._choose_metric_column(df, analysis_context)
 
         if not x_col and chart_type not in {"scatter"}:
             return json.dumps({"error": "Visualization requires a valid x column or the latest table context."})
-        if chart_type not in {"histogram", "pie", "donut"} and chart_type not in {"scatter"} and not y_col:
+        if chart_type == "heatmap" and (not y_col or not color_col):
+            return json.dumps({"error": "Heatmaps require x, y, and color value columns."})
+        if chart_type not in {"histogram", "pie", "donut", "heatmap"} and chart_type not in {"scatter"} and not y_col:
             return json.dumps({"error": "Visualization requires a valid y column for this chart type."})
 
         try:
@@ -276,6 +299,8 @@ class ToolExecutor:
         question = str(inputs.get("question", "") or "").strip()
         max_options = max(2, min(int(inputs.get("max_options", 3) or 3), 4))
         df = self._prepare_visualization_dataframe(rows)
+        analysis_context = question or source_title
+        question_intents = self._visual_intents(analysis_context)
         options: list[dict] = []
         seen_signatures: set[tuple] = set()
 
@@ -288,10 +313,13 @@ class ToolExecutor:
             reason: str,
             *,
             color_col: str | None = None,
+            score: float = 0.0,
+            business_question: str = "",
+            best_for: str = "",
+            watch_out: str = "",
         ) -> None:
-            if len(options) >= max_options:
-                return
-            if chart_df.empty or x_col not in chart_df.columns or y_col not in chart_df.columns:
+            required_columns = {column for column in [x_col, y_col, color_col] if column}
+            if chart_df.empty or not required_columns.issubset(set(chart_df.columns)):
                 return
 
             signature = (chart_type, tuple(chart_df.columns), x_col, y_col, color_col, title)
@@ -313,18 +341,21 @@ class ToolExecutor:
             seen_signatures.add(signature)
             options.append(
                 {
-                    "id": f"option_{len(options) + 1}",
                     "chart_type": chart_type,
                     "title": title,
                     "reason": reason,
+                    "score": score,
+                    "business_question": business_question or self._business_question_for_chart(chart_type, x_col, y_col, color_col),
+                    "best_for": best_for or self._best_for_chart(chart_type),
+                    "watch_out": watch_out or self._watch_out_for_chart(chart_type),
                     "chart_json": fig.to_json(),
                 }
             )
 
-        primary_dimension = self._choose_dimension_column(df, question)
-        secondary_dimension = self._choose_dimension_column(df, question, exclude={primary_dimension} if primary_dimension else None)
-        primary_metric = self._choose_metric_column(df, question)
-        secondary_metric = self._choose_metric_column(df, question, exclude={primary_metric} if primary_metric else None)
+        primary_dimension = self._choose_dimension_column(df, analysis_context)
+        secondary_dimension = self._choose_dimension_column(df, analysis_context, exclude={primary_dimension} if primary_dimension else None)
+        primary_metric = self._choose_metric_column(df, analysis_context)
+        secondary_metric = self._choose_metric_column(df, analysis_context, exclude={primary_metric} if primary_metric else None)
 
         if primary_dimension and primary_metric:
             chart_df = self._prepare_category_metric_frame(df, primary_dimension, primary_metric)
@@ -334,16 +365,24 @@ class ToolExecutor:
                     chart_df,
                     primary_dimension,
                     primary_metric,
-                    f"{primary_metric} over {primary_dimension}",
-                    "Best for seeing how the metric moves across an ordered timeline.",
+                    f"{self._humanize_label(primary_metric)} over {self._humanize_label(primary_dimension)}",
+                    "Best for showing how the workforce metric moves across an ordered time sequence.",
+                    score=9.3 if question_intents["trend"] else 8.8,
+                    business_question=f"How is {self._humanize_label(primary_metric).lower()} changing over {self._humanize_label(primary_dimension).lower()}?",
+                    best_for="Trend reading and inflection points across an ordered timeline.",
+                    watch_out="Less effective when the x-axis is not truly chronological.",
                 )
                 add_option(
                     "area",
                     chart_df,
                     primary_dimension,
                     primary_metric,
-                    f"Cumulative view of {primary_metric} over {primary_dimension}",
-                    "Adds more visual weight when the overall magnitude matters as much as the trend.",
+                    f"Cumulative view of {self._humanize_label(primary_metric)} over {self._humanize_label(primary_dimension)}",
+                    "Adds visual weight when the overall volume matters alongside the directional trend.",
+                    score=7.5 if question_intents["trend"] else 7.0,
+                    business_question=f"How much total {self._humanize_label(primary_metric).lower()} is building up over {self._humanize_label(primary_dimension).lower()}?",
+                    best_for="Showing scale plus direction in one view.",
+                    watch_out="Can make exact comparisons harder than a line chart.",
                 )
             else:
                 preferred_chart = "horizontal_bar" if self._prefer_horizontal_bars(chart_df, primary_dimension) else "bar"
@@ -352,16 +391,24 @@ class ToolExecutor:
                     chart_df,
                     primary_dimension,
                     primary_metric,
-                    f"{primary_metric} by {primary_dimension}",
+                    f"{self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)}",
                     "Best for comparing categories quickly and making the ranking immediately obvious.",
+                    score=9.4 if question_intents["ranking"] else 8.9,
+                    business_question=f"Which {self._humanize_label(primary_dimension).lower()} categories have the highest {self._humanize_label(primary_metric).lower()}?",
+                    best_for="Fast ranking, comparison, and executive readout.",
+                    watch_out="Composition within each bar is hidden unless you add a split dimension.",
                 )
                 add_option(
                     "bar" if preferred_chart == "horizontal_bar" else "horizontal_bar",
                     chart_df,
                     primary_dimension,
                     primary_metric,
-                    f"{primary_metric} by {primary_dimension}",
+                    f"{self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)}",
                     "A strong alternative when you want the same comparison in a different visual orientation.",
+                    score=7.4,
+                    business_question=f"How do {self._humanize_label(primary_dimension).lower()} categories compare on {self._humanize_label(primary_metric).lower()}?",
+                    best_for="The same core story in a different reading direction.",
+                    watch_out="Usually secondary to the highest-scoring rank chart.",
                 )
 
                 if secondary_dimension:
@@ -372,20 +419,50 @@ class ToolExecutor:
                             stacked_df,
                             primary_dimension,
                             primary_metric,
-                            f"{primary_metric} by {primary_dimension} split by {secondary_dimension}",
+                            f"{self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)} split by {self._humanize_label(secondary_dimension)}",
                             "Useful when you want both the total and the composition of each category in one view.",
                             color_col=secondary_dimension,
+                            score=8.0 if question_intents["composition"] else 7.2,
+                            business_question=(
+                                f"How does {self._humanize_label(primary_metric).lower()} split by "
+                                f"{self._humanize_label(secondary_dimension).lower()} within each {self._humanize_label(primary_dimension).lower()}?"
+                            ),
+                            best_for="Showing totals and mix together.",
+                            watch_out="Harder to compare segment sizes across many categories.",
+                        )
+
+                    heatmap_df = self._prepare_heatmap_frame(df, primary_dimension, secondary_dimension, primary_metric)
+                    if not heatmap_df.empty:
+                        add_option(
+                            "heatmap",
+                            heatmap_df,
+                            primary_dimension,
+                            secondary_dimension,
+                            f"{self._humanize_label(primary_metric)} heatmap across {self._humanize_label(primary_dimension)} and {self._humanize_label(secondary_dimension)}",
+                            "Strong for spotting the highest and lowest combinations across two categorical dimensions at a glance.",
+                            color_col=primary_metric,
+                            score=8.8 if question_intents["composition"] or question_intents["ranking"] else 8.1,
+                            business_question=(
+                                f"Where are the highest and lowest {self._humanize_label(primary_metric).lower()} combinations "
+                                f"across {self._humanize_label(primary_dimension).lower()} and {self._humanize_label(secondary_dimension).lower()}?"
+                            ),
+                            best_for="Matrix-style hotspot detection across two dimensions.",
+                            watch_out="Less precise than bars when exact ranking between close values matters.",
                         )
 
                 unique_categories = chart_df[primary_dimension].nunique(dropna=True)
-                if 2 <= unique_categories <= 7:
+                if 2 <= unique_categories <= 6:
                     add_option(
                         "donut",
                         chart_df,
                         primary_dimension,
                         primary_metric,
-                        f"Share of {primary_metric} by {primary_dimension}",
+                        f"Share of {self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)}",
                         "Works well for a small set of categories when relative share is the main story.",
+                        score=7.2 if question_intents["composition"] else 6.5,
+                        business_question=f"What share of {self._humanize_label(primary_metric).lower()} comes from each {self._humanize_label(primary_dimension).lower()} category?",
+                        best_for="High-level share of mix for a small number of groups.",
+                        watch_out="Not ideal for precise comparisons or longer category labels.",
                     )
         elif primary_metric and secondary_metric:
             scatter_df = self._limit_rows(df[[primary_metric, secondary_metric]].dropna(), max_rows=250)
@@ -394,16 +471,27 @@ class ToolExecutor:
                 scatter_df,
                 primary_metric,
                 secondary_metric,
-                f"{secondary_metric} vs {primary_metric}",
+                f"{self._humanize_label(secondary_metric)} vs {self._humanize_label(primary_metric)}",
                 "Best for checking the relationship and spread between two numeric measures.",
+                score=8.7 if question_intents["relationship"] else 7.6,
+                business_question=(
+                    f"How are {self._humanize_label(primary_metric).lower()} and "
+                    f"{self._humanize_label(secondary_metric).lower()} related?"
+                ),
+                best_for="Correlation, spread, clustering, and outliers.",
+                watch_out="Less intuitive for non-technical audiences if the relationship is weak.",
             )
             add_option(
                 "histogram",
                 df[[primary_metric]].dropna(),
                 primary_metric,
                 primary_metric,
-                f"Distribution of {primary_metric}",
+                f"Distribution of {self._humanize_label(primary_metric)}",
                 "Helps show concentration, skew, and outliers in a single metric.",
+                score=6.9 if question_intents["distribution"] else 6.1,
+                business_question=f"How is {self._humanize_label(primary_metric).lower()} distributed across the workforce?",
+                best_for="Understanding concentration and skew.",
+                watch_out="Does not show the relationship between two metrics.",
             )
         elif primary_metric:
             add_option(
@@ -411,8 +499,12 @@ class ToolExecutor:
                 df[[primary_metric]].dropna(),
                 primary_metric,
                 primary_metric,
-                f"Distribution of {primary_metric}",
+                f"Distribution of {self._humanize_label(primary_metric)}",
                 "Shows whether values cluster tightly or spread widely across the workforce.",
+                score=7.7 if question_intents["distribution"] else 6.8,
+                business_question=f"How is {self._humanize_label(primary_metric).lower()} distributed across employees or groups?",
+                best_for="Distribution shape, spread, and outlier detection.",
+                watch_out="Not ideal when the main decision is category ranking.",
             )
             if primary_dimension:
                 add_option(
@@ -420,8 +512,15 @@ class ToolExecutor:
                     self._build_box_frame(df, primary_dimension, primary_metric),
                     primary_dimension,
                     primary_metric,
-                    f"{primary_metric} spread by {primary_dimension}",
+                    f"{self._humanize_label(primary_metric)} spread by {self._humanize_label(primary_dimension)}",
                     "Strong choice when you need category-level spread rather than just averages.",
+                    score=8.1 if question_intents["distribution"] else 7.3,
+                    business_question=(
+                        f"How does the spread of {self._humanize_label(primary_metric).lower()} differ by "
+                        f"{self._humanize_label(primary_dimension).lower()}?"
+                    ),
+                    best_for="Comparing spread, median, and outliers across groups.",
+                    watch_out="Less intuitive than bars for simple average comparisons.",
                 )
         else:
             count_dimension = primary_dimension or self._choose_count_dimension(df, question)
@@ -434,8 +533,12 @@ class ToolExecutor:
                     count_df,
                     count_dimension,
                     count_metric,
-                    f"Employee count by {count_dimension}",
+                    f"Employee count by {self._humanize_label(count_dimension)}",
                     "Best baseline view for roster-style tables because it turns rows into an immediately readable ranking.",
+                    score=8.7,
+                    business_question=f"Which {self._humanize_label(count_dimension).lower()} categories have the highest employee count?",
+                    best_for="Clean ranking on roster-style or raw employee tables.",
+                    watch_out="Does not show proportional mix across a second dimension.",
                 )
 
                 share_dimension = self._choose_share_dimension(df, question, exclude={count_dimension})
@@ -447,8 +550,12 @@ class ToolExecutor:
                         share_df,
                         share_dimension,
                         count_metric,
-                        f"Employee mix by {share_dimension}",
+                        f"Employee mix by {self._humanize_label(share_dimension)}",
                         "Useful for showing the overall composition of the table rather than the rank order.",
+                        score=7.1 if chart_type == "donut" else 6.8,
+                        business_question=f"How is the workforce mix distributed across {self._humanize_label(share_dimension).lower()}?",
+                        best_for="Workforce composition and mix.",
+                        watch_out="Exact comparisons become harder as categories increase.",
                     )
 
                 if secondary_dimension and secondary_dimension != count_dimension:
@@ -458,19 +565,28 @@ class ToolExecutor:
                         secondary_df,
                         secondary_dimension,
                         count_metric,
-                        f"Employee count by {secondary_dimension}",
+                        f"Employee count by {self._humanize_label(secondary_dimension)}",
                         "Offers a second lens on the same roster so the user can compare different breakdowns.",
+                        score=6.5,
+                        business_question=f"How does employee count differ by {self._humanize_label(secondary_dimension).lower()}?",
+                        best_for="A second categorical lens on the same roster.",
+                        watch_out="Usually secondary to the strongest primary ranking view.",
                     )
 
         if not options:
             return json.dumps({"error": "The current table does not contain enough structure to suggest a visualization."})
 
+        ranked_options = sorted(options, key=lambda item: item.get("score", 0), reverse=True)[:max_options]
+        for index, option in enumerate(ranked_options, start=1):
+            option["id"] = f"option_{index}"
+            option.pop("score", None)
+
         return json.dumps(
             {
                 "title": f"Visualization options for {source_title}",
                 "source_title": source_title,
-                "recommended_option_id": options[0]["id"],
-                "options": options,
+                "recommended_option_id": ranked_options[0]["id"],
+                "options": ranked_options,
             }
         )
 
@@ -538,7 +654,7 @@ class ToolExecutor:
 
         if chart_type != "histogram" and x_col and x_col not in df.columns:
             raise ValueError(f"Column '{x_col}' is not available in the table.")
-        if chart_type not in {"histogram", "pie", "donut"} and y_col and y_col not in df.columns:
+        if chart_type not in {"histogram", "pie", "donut", "heatmap"} and y_col and y_col not in df.columns:
             raise ValueError(f"Column '{y_col}' is not available in the table.")
         if chart_type == "histogram" and x_col not in df.columns:
             raise ValueError("Histogram requires a valid x column.")
@@ -546,6 +662,8 @@ class ToolExecutor:
             raise ValueError("Pie and donut charts require both a category column and a value column.")
         if chart_type == "scatter" and (x_col not in df.columns or y_col not in df.columns):
             raise ValueError("Scatter plots require two numeric columns.")
+        if chart_type == "heatmap" and (x_col not in df.columns or y_col not in df.columns or not color_col or color_col not in df.columns):
+            raise ValueError("Heatmaps require x, y, and color value columns.")
         if color_col and color_col not in df.columns:
             color_col = None
 
@@ -559,6 +677,8 @@ class ToolExecutor:
             chart_df = chart_df[[x_col, y_col]].dropna()
         elif chart_type == "histogram":
             chart_df = chart_df[[x_col]].dropna()
+        elif chart_type == "heatmap":
+            chart_df = chart_df[[x_col, y_col, color_col]].dropna()
 
         if chart_df.empty:
             raise ValueError("The selected columns do not contain enough data to plot.")
@@ -665,13 +785,44 @@ class ToolExecutor:
                 color_discrete_sequence=CHART_PALETTE,
                 points="outliers",
             )
+        elif chart_type == "heatmap":
+            frame = self._prepare_heatmap_frame(chart_df, x_col, y_col, color_col)
+            if frame.empty:
+                raise ValueError("The selected columns do not contain enough structure for a heatmap.")
+            x_order = list(dict.fromkeys(frame[x_col].tolist()))
+            y_order = list(dict.fromkeys(frame[y_col].tolist()))
+            pivot = frame.pivot_table(index=y_col, columns=x_col, values=color_col, aggfunc="mean")
+            pivot = pivot.reindex(
+                index=[value for value in y_order if value in pivot.index],
+                columns=[value for value in x_order if value in pivot.columns],
+            )
+            fig = go.Figure(
+                data=go.Heatmap(
+                    z=pivot.values,
+                    x=list(pivot.columns),
+                    y=list(pivot.index),
+                    colorscale=HEATMAP_COLOR_SCALE,
+                    hoverongaps=False,
+                    colorbar=dict(title=self._humanize_label(color_col)),
+                )
+            )
+            fig.update_layout(title=title)
         else:
             raise ValueError(f"Unsupported chart type '{chart_type}'.")
 
-        self._style_figure(fig, chart_type)
+        self._style_figure(fig, chart_type, x_col=x_col, y_col=y_col, color_col=color_col, chart_df=chart_df)
         return fig
 
-    def _style_figure(self, fig, chart_type: str) -> None:
+    def _style_figure(
+        self,
+        fig,
+        chart_type: str,
+        *,
+        x_col: str = "",
+        y_col: str = "",
+        color_col: str | None = None,
+        chart_df: pd.DataFrame | None = None,
+    ) -> None:
         fig.update_layout(
             paper_bgcolor="rgba(255,255,255,0)",
             plot_bgcolor="#F8FBFF",
@@ -704,14 +855,255 @@ class ToolExecutor:
             title_font=dict(color="#1E293B"),
         )
         fig.update_traces(marker_line_width=1.2, marker_line_color="rgba(255,255,255,0.9)", selector=dict(type="bar"))
-        fig.update_traces(opacity=0.92, selector=dict(type="histogram"))
+        fig.update_traces(opacity=0.94, selector=dict(type="histogram"))
         fig.update_traces(line=dict(width=3), marker=dict(size=8), selector=dict(type="scatter"))
+
+        x_label = self._humanize_label(x_col)
+        y_label = self._humanize_label(y_col)
 
         if chart_type in {"line", "area"}:
             fig.update_layout(hovermode="x unified")
-        if chart_type in {"pie", "donut"}:
-            fig.update_traces(textposition="inside", textinfo="percent+label")
+
+        if chart_type == "horizontal_bar":
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=y_label)
+            fig.update_yaxes(title_text=x_label, automargin=True)
+            self._apply_numeric_axis_format(fig, "x", metric_profile)
+            fig.update_traces(
+                texttemplate=self._plotly_value_token(metric_profile, "x"),
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate=(
+                    f"{x_label}: %{{y}}<br>"
+                    f"{y_label}: {self._plotly_value_token(metric_profile, 'x')}<extra></extra>"
+                ),
+                selector=dict(type="bar"),
+            )
+        elif chart_type in {"bar", "stacked_bar", "line", "area", "box"}:
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=x_label, automargin=True)
+            fig.update_yaxes(title_text=y_label)
+            self._apply_numeric_axis_format(fig, "y", metric_profile)
+            if chart_type in {"bar", "stacked_bar"}:
+                textposition = "outside" if chart_type == "bar" and chart_df is not None and len(chart_df) <= 10 else "auto"
+                fig.update_traces(
+                    texttemplate=self._plotly_value_token(metric_profile, "y"),
+                    textposition=textposition,
+                    cliponaxis=False,
+                    hovertemplate=(
+                        f"{x_label}: %{{x}}<br>"
+                        f"{y_label}: {self._plotly_value_token(metric_profile, 'y')}<extra></extra>"
+                    ),
+                    selector=dict(type="bar"),
+                )
+            elif chart_type in {"line", "area"}:
+                fig.update_traces(
+                    hovertemplate=(
+                        f"{x_label}: %{{x}}<br>"
+                        f"{y_label}: {self._plotly_value_token(metric_profile, 'y')}<extra></extra>"
+                    )
+                )
+            elif chart_type == "box":
+                fig.update_traces(
+                    boxmean=True,
+                    hovertemplate=(
+                        f"{x_label}: %{{x}}<br>"
+                        f"{y_label}: {self._plotly_value_token(metric_profile, 'y')}<extra></extra>"
+                    )
+                )
+        elif chart_type == "scatter":
+            x_profile = self._metric_profile(x_col, chart_df[x_col] if chart_df is not None and x_col in chart_df.columns else None)
+            y_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=x_label)
+            fig.update_yaxes(title_text=y_label)
+            self._apply_numeric_axis_format(fig, "x", x_profile)
+            self._apply_numeric_axis_format(fig, "y", y_profile)
+            fig.update_traces(
+                hovertemplate=(
+                    f"{x_label}: {self._plotly_value_token(x_profile, 'x')}<br>"
+                    f"{y_label}: {self._plotly_value_token(y_profile, 'y')}<extra></extra>"
+                )
+            )
+        elif chart_type == "histogram":
+            metric_profile = self._metric_profile(x_col, chart_df[x_col] if chart_df is not None and x_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=x_label)
+            fig.update_yaxes(title_text="Employees")
+            self._apply_numeric_axis_format(fig, "x", metric_profile)
+            fig.update_traces(
+                hovertemplate=(
+                    f"{x_label}: {self._plotly_value_token(metric_profile, 'x')}<br>"
+                    "Employees: %{y:,.0f}<extra></extra>"
+                )
+            )
+        elif chart_type in {"pie", "donut"}:
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            label_count = chart_df[x_col].nunique(dropna=True) if chart_df is not None and x_col in chart_df.columns else 0
+            fig.update_traces(
+                textposition="inside",
+                textinfo="percent+label" if label_count <= 5 else "percent",
+                hovertemplate=(
+                    f"{x_label}: %{{label}}<br>"
+                    f"{y_label}: {self._plotly_value_token(metric_profile, 'value')}<br>"
+                    "Share: %{percent}<extra></extra>"
+                ),
+            )
             fig.update_layout(showlegend=True)
+        elif chart_type == "heatmap":
+            metric_profile = self._metric_profile(color_col or "", chart_df[color_col] if chart_df is not None and color_col and color_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=x_label, showgrid=False)
+            fig.update_yaxes(title_text=y_label, showgrid=False, automargin=True)
+            fig.update_traces(
+                xgap=2,
+                ygap=2,
+                texttemplate=self._plotly_value_token(metric_profile, "z"),
+                hovertemplate=(
+                    f"{x_label}: %{{x}}<br>"
+                    f"{y_label}: %{{y}}<br>"
+                    f"{self._humanize_label(color_col or '')}: {self._plotly_value_token(metric_profile, 'z')}<extra></extra>"
+                ),
+                selector=dict(type="heatmap"),
+            )
+
+    def _metric_profile(self, column_name: str, series: pd.Series | None = None) -> dict[str, str | int]:
+        lowered = str(column_name or "").lower()
+        if any(keyword in lowered for keyword in PERCENT_VALUE_KEYWORDS):
+            return {"kind": "percent", "precision": 1, "tickprefix": "", "ticksuffix": "%"}
+        if any(keyword in lowered for keyword in CURRENCY_VALUE_KEYWORDS):
+            return {"kind": "currency", "precision": 0, "tickprefix": "$", "ticksuffix": ""}
+        if any(keyword in lowered for keyword in YEARS_VALUE_KEYWORDS):
+            return {"kind": "years", "precision": 1, "tickprefix": "", "ticksuffix": " yrs"}
+        if any(keyword in lowered for keyword in COUNT_VALUE_KEYWORDS):
+            return {"kind": "count", "precision": 0, "tickprefix": "", "ticksuffix": ""}
+
+        precision = 1
+        if series is not None:
+            try:
+                numeric = pd.to_numeric(series.dropna(), errors="coerce")
+                if not numeric.empty and (numeric % 1 == 0).all():
+                    precision = 0
+            except (TypeError, ValueError):
+                precision = 1
+        return {"kind": "number", "precision": precision, "tickprefix": "", "ticksuffix": ""}
+
+    def _plotly_value_token(self, profile: dict[str, str | int], token: str) -> str:
+        precision = int(profile.get("precision", 1) or 0)
+        format_spec = f",.{precision}f"
+        prefix = str(profile.get("tickprefix", "") or "")
+        suffix = str(profile.get("ticksuffix", "") or "")
+        return f"{prefix}%{{{token}:{format_spec}}}{suffix}"
+
+    def _apply_numeric_axis_format(self, fig, axis: str, profile: dict[str, str | int]) -> None:
+        update = {
+            "tickformat": f",.{int(profile.get('precision', 1) or 0)}f",
+            "tickprefix": str(profile.get("tickprefix", "") or ""),
+            "ticksuffix": str(profile.get("ticksuffix", "") or ""),
+            "separatethousands": True,
+        }
+        if axis == "x":
+            fig.update_xaxes(**update)
+        else:
+            fig.update_yaxes(**update)
+
+    def _humanize_label(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+        text = text.replace("_", " ")
+        replacements = {
+            "pct": "rate",
+            "avg": "average",
+            "num": "number",
+        }
+        parts = [replacements.get(part.lower(), part) for part in text.split()]
+        return " ".join(parts).strip().title()
+
+    def _prepare_heatmap_frame(self, df: pd.DataFrame, x_col: str, y_col: str, value_col: str) -> pd.DataFrame:
+        frame = df[[x_col, y_col, value_col]].dropna().copy()
+        if frame.empty:
+            return frame
+        if frame[x_col].nunique(dropna=True) > 12 or frame[y_col].nunique(dropna=True) > 8:
+            return pd.DataFrame()
+        frame[x_col] = frame[x_col].astype(str)
+        frame[y_col] = frame[y_col].astype(str)
+        aggregation = self._aggregation_method_for_metric(value_col)
+        return (
+            frame.groupby([x_col, y_col], dropna=False, sort=False)[value_col]
+            .agg(aggregation)
+            .reset_index()
+        )
+
+    def _aggregation_method_for_metric(self, value_col: str) -> str:
+        lowered = str(value_col or "").lower()
+        if any(keyword in lowered for keyword in COUNT_VALUE_KEYWORDS):
+            return "sum"
+        return "mean"
+
+    def _visual_intents(self, question: str) -> dict[str, bool]:
+        lowered = str(question or "").lower()
+        return {
+            "trend": any(token in lowered for token in ("trend", "over time", "timeline", "month", "quarter", "year")),
+            "distribution": any(token in lowered for token in ("distribution", "spread", "range", "outlier", "variance")),
+            "relationship": any(token in lowered for token in ("relationship", "correlation", "versus", "vs", "against")),
+            "composition": any(token in lowered for token in ("share", "mix", "composition", "split", "breakdown")),
+            "ranking": any(token in lowered for token in ("top", "highest", "lowest", "rank", "compare", "leaders", "laggards")),
+        }
+
+    def _business_question_for_chart(self, chart_type: str, x_col: str, y_col: str, color_col: str | None = None) -> str:
+        x_label = self._humanize_label(x_col).lower()
+        y_label = self._humanize_label(y_col).lower()
+        color_label = self._humanize_label(color_col or "").lower()
+        if chart_type in {"bar", "horizontal_bar"}:
+            return f"Which {x_label} categories have the highest {y_label}?"
+        if chart_type == "stacked_bar":
+            return f"How does {y_label} split by {color_label} within each {x_label}?"
+        if chart_type in {"pie", "donut"}:
+            return f"What share of {y_label} comes from each {x_label} category?"
+        if chart_type == "line":
+            return f"How is {y_label} changing over {x_label}?"
+        if chart_type == "area":
+            return f"How much total {y_label} is building up over {x_label}?"
+        if chart_type == "scatter":
+            return f"How are {x_label} and {y_label} related?"
+        if chart_type == "histogram":
+            return f"How is {x_label} distributed?"
+        if chart_type == "box":
+            return f"How does the spread of {y_label} differ by {x_label}?"
+        if chart_type == "heatmap":
+            return f"Where are the highest and lowest {color_label} combinations across {x_label} and {y_label}?"
+        return "What is the clearest way to view this workforce pattern?"
+
+    def _best_for_chart(self, chart_type: str) -> str:
+        mapping = {
+            "bar": "Fast ranking and straightforward category comparison.",
+            "horizontal_bar": "Readable ranking when labels are longer or there are more categories.",
+            "stacked_bar": "Showing total volume and mix in the same view.",
+            "pie": "High-level share of mix with a very small number of categories.",
+            "donut": "Executive-friendly share of mix for a small set of groups.",
+            "line": "Trend direction and inflection points over time.",
+            "area": "Trend plus magnitude in one view.",
+            "scatter": "Relationship, clustering, and outlier detection between two measures.",
+            "histogram": "Distribution shape, concentration, and skew.",
+            "box": "Spread, median, and outlier comparison across groups.",
+            "heatmap": "Hotspot detection across two dimensions.",
+        }
+        return mapping.get(chart_type, "Understanding the main workforce pattern quickly.")
+
+    def _watch_out_for_chart(self, chart_type: str) -> str:
+        mapping = {
+            "bar": "Composition within categories stays hidden.",
+            "horizontal_bar": "Secondary once label length is no longer a problem.",
+            "stacked_bar": "Segment-to-segment comparison can get hard in dense charts.",
+            "pie": "Precise comparisons become difficult once there are many slices.",
+            "donut": "Not ideal for exact rank-order comparison.",
+            "line": "Only use when the x-axis has a real order.",
+            "area": "Can obscure exact comparisons between nearby values.",
+            "scatter": "Less intuitive when the relationship is weak or noisy.",
+            "histogram": "Does not explain which categories drive the pattern.",
+            "box": "More analytical than narrative for some business audiences.",
+            "heatmap": "Less precise than bars when exact ranking matters most.",
+        }
+        return mapping.get(chart_type, "Use the chart that answers the decision question most directly.")
 
     def _prepare_category_metric_frame(self, df: pd.DataFrame, category_col: str, metric_col: str) -> pd.DataFrame:
         frame = df[[category_col, metric_col]].dropna().copy()

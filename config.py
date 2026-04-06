@@ -47,6 +47,8 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 
 # Security: LLM call timeout (seconds)
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+LLM_RATE_LIMIT_RETRIES = int(os.getenv("LLM_RATE_LIMIT_RETRIES", "2"))
+LLM_RATE_LIMIT_BACKOFF_SECONDS = float(os.getenv("LLM_RATE_LIMIT_BACKOFF_SECONDS", "1.5"))
 
 # Conversation history: max messages kept in agent loop
 MAX_CONVERSATION_HISTORY = int(os.getenv("MAX_CONVERSATION_HISTORY", "40"))
