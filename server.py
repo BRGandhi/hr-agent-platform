@@ -728,7 +728,14 @@ if STATIC_DIR.exists():
 def serve_index():
     index = STATIC_DIR / "index.html"
     if index.exists():
-        return FileResponse(str(index))
+        return FileResponse(
+            str(index),
+            headers={
+                "Cache-Control": "no-store, max-age=0, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return JSONResponse({"error": "Frontend not found. Run the server from hr_agent_platform/"})
 
 

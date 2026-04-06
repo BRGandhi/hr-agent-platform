@@ -251,6 +251,29 @@ class ContextStorePersonalizationTests(unittest.TestCase):
         self.assertIn("Research & Development is the largest unit.", memory["insight_summary"])
         self.assertIn("Sales is the second-largest unit.", memory["insight_summary"])
 
+    def test_memory_summary_skips_follow_up_question_section(self):
+        memory_id = self.store.remember(
+            self.user_email,
+            "What is the headcount for Business Units?",
+            (
+                "The current headcount for Business Units is 1,470 employees.\n\n"
+                "### Follow-up questions\n"
+                "- Can you break headcount down by department in Business Units?\n"
+                "- Which employee job roles have the highest headcount in Business Units?"
+            ),
+        )
+
+        memory = self.store.get_memory(
+            self.user_email,
+            memory_id,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        self.assertIsNotNone(memory)
+        self.assertIn("The current headcount for Business Units is 1,470 employees.", memory["insight_summary"])
+        self.assertNotIn("Can you break headcount down by department", memory["insight_summary"])
+        self.assertNotIn("Which employee job roles have the highest headcount", memory["insight_summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

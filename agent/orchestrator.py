@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Generator
 
 from agent.llm_client import LLMClientError, LLMConfig, create_llm_client
@@ -30,6 +31,75 @@ VISUAL_FOLLOW_UP_KEYWORDS = ("visual", "visualize", "visualization", "chart", "g
 PRIOR_RESULT_REFERENCES = ("this", "that", "it", "above", "previous", "latest", "table", "result")
 HISTORY_LOOKUP_KEYWORDS = ("before", "earlier", "again", "last time", "previous", "prior", "past chat", "dive back")
 DOCUMENT_LOOKUP_KEYWORDS = ("policy", "policies", "access", "rule", "rules", "definition", "schema", "tag", "document")
+REPORT_OUTPUT_NOUNS = (
+    "report",
+    "roster",
+    "table",
+    "spreadsheet",
+    "employee-level",
+    "employee level",
+    "name-by-name",
+    "name by name",
+    "employee list",
+    "listing",
+)
+REPORT_OUTPUT_VERBS = ("generate", "create", "build", "produce", "show", "list", "give", "provide", "open", "export", "download", "need", "want", "send")
+REPORT_COLUMN_TERMS = (
+    "column",
+    "columns",
+    "field",
+    "fields",
+    "employeenumber",
+    "employee number",
+    "employee label",
+    "department",
+    "job role",
+    "jobrole",
+    "job level",
+    "joblevel",
+    "overtime",
+    "business travel",
+    "businesstravel",
+    "attrition",
+    "gender",
+    "age",
+    "marital status",
+    "maritalstatus",
+    "monthly income",
+    "monthlyincome",
+    "performance rating",
+    "performancerating",
+    "job satisfaction",
+    "jobsatisfaction",
+    "environment satisfaction",
+    "environmentsatisfaction",
+    "years at company",
+    "yearsatcompany",
+)
+REPORT_CUT_PHRASES = (
+    "by department",
+    "by job role",
+    "by joblevel",
+    "by job level",
+    "by overtime",
+    "by gender",
+    "by age",
+    "by marital status",
+    "by business travel",
+    "by education field",
+    "employee-level",
+    "employee level",
+    "name-by-name",
+    "name by name",
+    "break down",
+    "breakdown",
+    "split by",
+    "group by",
+    "grouped by",
+    "cut by",
+    "slice by",
+    "segment by",
+)
 GENERIC_FOLLOW_UP_REPLIES = {
     "yes",
     "yes please",
@@ -67,6 +137,42 @@ CONTEXTUAL_REPLY_PHRASES = (
     "those ones",
 )
 FOLLOW_UP_REFERENCE_WORDS = {"this", "that", "it", "those", "them", "same"}
+FOLLOW_UP_SECTION_MARKERS = (
+    "follow-up questions",
+    "follow up questions",
+    "next questions",
+    "questions to ask next",
+    "you could also ask",
+)
+FINAL_RESPONSE_REFUSAL_MARKERS = (
+    "this platform only supports hr insights",
+    "out of scope for your role",
+    "no access profile provisioned",
+    "agent reached max iterations",
+    "the model returned no final text",
+)
+CLARIFICATION_RESPONSE_MARKERS = (
+    "before i generate that report",
+    "before i build that table",
+    "which hr report or measure do you want",
+    "which columns should i include",
+    "how should i cut the data",
+)
+RATE_LIMIT_MESSAGE_MARKERS = (
+    "rate limit",
+    "too many requests",
+    "try again shortly",
+)
+FOLLOW_UP_METRIC_ORDER = (
+    "headcount",
+    "attrition",
+    "compensation",
+    "performance",
+    "satisfaction",
+    "tenure",
+    "demographics",
+    "policy",
+)
 
 
 class HRAgent:
@@ -125,6 +231,10 @@ class HRAgent:
             if content:
                 return content
         return ""
+
+    def _latest_assistant_requested_clarification(self) -> bool:
+        latest_assistant = self._latest_message_content("assistant").lower()
+        return any(marker in latest_assistant for marker in CLARIFICATION_RESPONSE_MARKERS)
 
     def _latest_user_context_anchor(self) -> str:
         fallback = ""
@@ -216,6 +326,9 @@ class HRAgent:
         if len(words) > 8:
             return False
 
+        if self._latest_assistant_requested_clarification() and not str(user_message or "").strip().endswith("?"):
+            return True
+
         if normalized in GENERIC_FOLLOW_UP_REPLIES:
             return True
         if any(phrase in normalized for phrase in CONTEXTUAL_REPLY_PHRASES):
@@ -273,6 +386,69 @@ class HRAgent:
         if "report" in lowered or "roster" in lowered:
             return "report"
         return "data_query"
+
+    def _looks_like_output_request(self, user_message: str, route: str) -> bool:
+        lowered = self._normalized_message(user_message)
+        has_output_noun = any(noun in lowered for noun in REPORT_OUTPUT_NOUNS)
+        has_output_verb = any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in REPORT_OUTPUT_VERBS)
+        employee_listing_request = bool(re.search(r"\b(show|list|export|download|give|provide)\b.*\bemployees?\b", lowered))
+        analytic_question = bool(re.match(r"^(which|what|how|why|where|who)\b", lowered)) and str(user_message or "").strip().endswith("?")
+
+        if analytic_question and not has_output_verb and not employee_listing_request:
+            return False
+        if employee_listing_request:
+            return True
+        if route == "report" and has_output_noun and not analytic_question:
+            return True
+        return has_output_noun and has_output_verb
+
+    def _report_request_has_columns(self, user_message: str) -> bool:
+        lowered = self._normalized_message(user_message)
+        if re.search(r"\b(columns?|fields?)\b", lowered):
+            return True
+        explicit_fields = sum(1 for term in REPORT_COLUMN_TERMS if term in lowered)
+        return explicit_fields >= 2
+
+    def _report_request_has_cut(self, user_message: str) -> bool:
+        lowered = self._normalized_message(user_message)
+        return any(phrase in lowered for phrase in REPORT_CUT_PHRASES)
+
+    def _report_request_has_subject(self, user_message: str, access_profile: AccessProfile) -> bool:
+        lowered = self._normalized_message(user_message)
+        requested_metrics = access_profile.requested_metrics_for_question(user_message)
+        if requested_metrics:
+            return True
+        return any(term in lowered for term in ("headcount", "attrition", "turnover", "employees", "workforce", "promotion", "tenure"))
+
+    def _clarification_prompt_for_request(
+        self,
+        user_message: str,
+        route: str,
+        access_profile: AccessProfile,
+    ) -> str:
+        if not self._looks_like_output_request(user_message, route):
+            return ""
+
+        has_subject = self._report_request_has_subject(user_message, access_profile)
+        has_columns = self._report_request_has_columns(user_message)
+        has_cut = self._report_request_has_cut(user_message)
+
+        if has_subject and has_columns and has_cut:
+            return ""
+
+        opener = "Before I generate that report, please confirm these details:"
+        if route != "report":
+            opener = "Before I build that table, please confirm these details:"
+
+        prompts = []
+        if not has_subject:
+            prompts.append("- Which HR report or measure do you want? For example: active headcount, attrition, or an employee roster.")
+        if not has_columns:
+            prompts.append("- Which columns should I include? For example: EmployeeNumber, Department, JobRole, JobLevel, and OverTime.")
+        if not has_cut:
+            prompts.append("- How should I cut the data? For example: employee-level, by department, by job role, or by job level.")
+
+        return f"{opener}\n" + "\n".join(prompts)
 
     def _prefetch_context(
         self,
@@ -344,6 +520,16 @@ class HRAgent:
             yield {"type": "final_text", "text": reason}
             return
 
+        route = self._route_request(access_check_message, active_table_context)
+        clarification_text = self._clarification_prompt_for_request(access_check_message, route, access_profile)
+        if clarification_text:
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self._trim_history()
+            self.conversation_history.append({"role": "assistant", "content": clarification_text})
+            self._trim_history()
+            yield {"type": "final_text", "text": clarification_text}
+            return
+
         recent_memory, related_memory, helpful_memory, context_documents, route = self._prefetch_context(
             access_check_message,
             access_profile,
@@ -387,7 +573,20 @@ class HRAgent:
                     messages=self.conversation_history,
                 )
             except LLMClientError as exc:
-                yield {"type": "error", "message": str(exc)}
+                error_message = str(exc)
+                if self._is_rate_limit_error(error_message):
+                    fallback_events = self._recover_from_rate_limit(
+                        user_message,
+                        route,
+                        access_profile,
+                        active_table_context,
+                        error_message,
+                    )
+                    if fallback_events:
+                        for event in fallback_events:
+                            yield event
+                        return
+                yield {"type": "error", "message": error_message}
                 return
 
             if response.text:
@@ -486,15 +685,29 @@ class HRAgent:
 
                 continue
 
-            final_text = response.text.strip() or "(The model returned no final text.)"
+            final_text = self._finalize_response_text(
+                response.text,
+                access_check_message,
+                route,
+                access_profile,
+            )
+            self.conversation_history[-1]["content"] = final_text
             memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
             yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
             return
 
         # Max iterations reached — return best-effort answer if available
         if last_text:
-            memory_id = self.context_store.remember(access_profile.email, user_message, last_text)
-            yield {"type": "final_text", "text": last_text, "memory_id": memory_id, "feedback_score": 0}
+            final_text = self._finalize_response_text(
+                last_text,
+                access_check_message,
+                route,
+                access_profile,
+            )
+            if self.conversation_history and self.conversation_history[-1].get("role") == "assistant":
+                self.conversation_history[-1]["content"] = final_text
+            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
         else:
             fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
             self.context_store.remember(access_profile.email, user_message, fallback)
@@ -506,3 +719,233 @@ class HRAgent:
         except (json.JSONDecodeError, TypeError) as exc:
             logger.debug("JSON parse failed for tool result: %s", exc)
             return {"error": f"Failed to parse tool result", "raw": value[:500]}
+
+    def _has_structured_follow_up_questions(self, text: str) -> bool:
+        lowered = str(text or "").lower()
+        if not any(marker in lowered for marker in FOLLOW_UP_SECTION_MARKERS):
+            return False
+
+        bullet_questions = [
+            line.strip()
+            for line in str(text or "").splitlines()
+            if re.match(r"^(?:[-*+]|\d+[.)])\s+.+\?$", line.strip())
+        ]
+        return len(bullet_questions) >= 2
+
+    def _is_refusal_or_empty_response(self, text: str) -> bool:
+        normalized = self._normalized_message(text)
+        if not normalized:
+            return True
+        return any(marker in normalized for marker in FINAL_RESPONSE_REFUSAL_MARKERS)
+
+    def _is_clarification_response(self, text: str) -> bool:
+        normalized = self._normalized_message(text)
+        return any(marker in normalized for marker in CLARIFICATION_RESPONSE_MARKERS)
+
+    def _is_rate_limit_error(self, text: str) -> bool:
+        normalized = self._normalized_message(text)
+        return any(marker in normalized for marker in RATE_LIMIT_MESSAGE_MARKERS)
+
+    def _requests_visualization(self, user_message: str, route: str) -> bool:
+        if route == "visual_follow_up":
+            return True
+        normalized = self._normalized_message(user_message)
+        return any(keyword in normalized for keyword in VISUAL_FOLLOW_UP_KEYWORDS)
+
+    def _recover_from_rate_limit(
+        self,
+        user_message: str,
+        route: str,
+        access_profile: AccessProfile,
+        table_context: dict | None,
+        error_message: str,
+    ) -> list[dict]:
+        rows = list((table_context or {}).get("rows") or [])
+        title = str((table_context or {}).get("title") or "Latest Table").strip() or "Latest Table"
+
+        if rows and self._requests_visualization(user_message, route):
+            raw_options = self.executor.execute(
+                "suggest_visualizations",
+                {
+                    "title": title,
+                    "question": user_message,
+                    "max_options": 3,
+                },
+                access_profile=access_profile,
+                table_context=table_context,
+            )
+            parsed_options = self._safe_parse_json(raw_options)
+            if isinstance(parsed_options, dict) and isinstance(parsed_options.get("options"), list) and parsed_options["options"]:
+                recommended_option_id = parsed_options.get("recommended_option_id")
+                recommended_option = next(
+                    (
+                        option
+                        for option in parsed_options["options"]
+                        if str(option.get("id") or "") == str(recommended_option_id or "")
+                    ),
+                    parsed_options["options"][0],
+                )
+                fallback_text = (
+                    "I retrieved the workforce data successfully and generated the strongest chart option directly "
+                    "from the latest table while the model provider was temporarily rate-limited. "
+                    "The recommended visual is shown above, and you can compare alternatives in Visual options."
+                )
+                final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
+                self.conversation_history.append({"role": "assistant", "content": final_text})
+                self._trim_history()
+                memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+
+                events = [
+                    {
+                        "type": "visual_options",
+                        "title": parsed_options.get("title", f"Visualization options for {title}"),
+                        "recommended_option_id": recommended_option_id or recommended_option.get("id"),
+                        "options": parsed_options["options"],
+                    }
+                ]
+                if recommended_option.get("chart_json"):
+                    events.append(
+                        {
+                            "type": "chart",
+                            "chart_json": recommended_option["chart_json"],
+                            "title": recommended_option.get("title", f"Visualization for {title}"),
+                        }
+                    )
+                events.append({"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0})
+                return events
+
+        if rows:
+            fallback_text = (
+                "I retrieved the workforce data successfully, and the table above is ready to use. "
+                f"The model provider then hit a temporary rate limit before I could finish the narrative summary ({error_message}). "
+                "You can keep working from this result now or retry the written summary in a moment."
+            )
+            final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
+            self.conversation_history.append({"role": "assistant", "content": final_text})
+            self._trim_history()
+            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            return [{"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}]
+
+        return []
+
+    def _follow_up_candidates_for_metric(self, metric: str, scope_name: str) -> list[str]:
+        scope_suffix = f" in {scope_name}" if scope_name else ""
+        banks = {
+            "headcount": [
+                f"Can you break headcount down by department{scope_suffix}?",
+                f"Which employee job roles have the highest headcount{scope_suffix}?",
+                f"Can you show the active headcount roster for {scope_name}?" if scope_name else "Can you show the active headcount roster for this workforce?",
+            ],
+            "attrition": [
+                f"Which departments or employee groups are driving the highest attrition{scope_suffix}?",
+                f"How does attrition vary by overtime{scope_suffix}?",
+                f"Can you show the highest-risk attrition hotspots by department{scope_suffix}?",
+            ],
+            "compensation": [
+                f"How does employee compensation vary by department{scope_suffix}?",
+                f"Which employee groups sit above or below the average income range{scope_suffix}?",
+                f"Is attrition higher in lower-paid employee groups{scope_suffix}?",
+            ],
+            "performance": [
+                f"How do employee performance ratings vary by department{scope_suffix}?",
+                f"Which employee groups have the highest performance ratings{scope_suffix}?",
+                f"Is attrition higher among lower-rated employee groups{scope_suffix}?",
+            ],
+            "satisfaction": [
+                f"Which departments have the lowest employee satisfaction{scope_suffix}?",
+                f"How does employee satisfaction differ by job level{scope_suffix}?",
+                f"Is lower employee satisfaction linked to higher attrition{scope_suffix}?",
+            ],
+            "tenure": [
+                f"How does employee tenure vary by department{scope_suffix}?",
+                "Which employee groups have the longest average time to promotion?",
+                f"Is attrition concentrated among lower-tenure employees{scope_suffix}?",
+            ],
+            "demographics": [
+                "How does the workforce result break down by gender or age band?",
+                f"Which demographic employee groups are most represented{scope_suffix}?",
+                f"Does attrition vary across demographic groups{scope_suffix}?",
+            ],
+            "policy": [
+                f"Which HR access policy applies to my role for {scope_name}?" if scope_name else "Which HR access policy applies to my role?",
+                "Which HR measures are approved for my role?",
+                "How are HR department filters enforced in this workspace?",
+            ],
+        }
+        return banks.get(metric, [])
+
+    def _build_follow_up_questions(
+        self,
+        source_message: str,
+        route: str,
+        access_profile: AccessProfile,
+    ) -> list[str]:
+        requested_metric_set = access_profile.requested_metrics_for_question(source_message)
+        requested_metrics = [metric for metric in FOLLOW_UP_METRIC_ORDER if metric in requested_metric_set]
+        scope_name = str(access_profile.scope_name or "").strip()
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add_candidate(question: str):
+            cleaned = " ".join(str(question or "").split()).strip()
+            if not cleaned:
+                return
+            if not cleaned.endswith("?"):
+                cleaned = f"{cleaned}?"
+            key = cleaned.lower()
+            if key in seen:
+                return
+            allowed, _ = access_profile.can_access_question(cleaned)
+            if not allowed:
+                return
+            seen.add(key)
+            candidates.append(cleaned)
+
+        if route == "policy" and "policy" not in requested_metrics:
+            requested_metrics.append("policy")
+        if not requested_metrics and route != "policy":
+            requested_metrics.append("headcount")
+
+        if route == "visual_follow_up":
+            add_candidate("Can you show the HR table behind this visual?")
+            add_candidate("Which departments or employee groups stand out most in this visual?")
+
+        if route == "report":
+            add_candidate("Can you generate the employee-level roster behind this result?")
+            add_candidate("Can you break this report down by department or job level?")
+
+        for metric in requested_metrics:
+            for question in self._follow_up_candidates_for_metric(metric, scope_name):
+                add_candidate(question)
+
+        generic_questions = [
+            "Can you break this workforce answer down by department?",
+            f"Which employee groups stand out most in {scope_name}?" if scope_name else "Which employee groups stand out most in this workforce?",
+            "Can you show the employee-level roster behind this HR answer?",
+        ]
+        for question in generic_questions:
+            add_candidate(question)
+
+        return candidates[:3]
+
+    def _finalize_response_text(
+        self,
+        raw_text: str,
+        source_message: str,
+        route: str,
+        access_profile: AccessProfile,
+    ) -> str:
+        text = str(raw_text or "").strip() or "(The model returned no final text.)"
+        if self._is_refusal_or_empty_response(text):
+            return text
+        if self._is_clarification_response(text):
+            return text
+        if self._has_structured_follow_up_questions(text):
+            return text
+
+        follow_up_questions = self._build_follow_up_questions(source_message, route, access_profile)
+        if len(follow_up_questions) < 2:
+            return text
+
+        follow_up_block = "\n".join(f"- {question}" for question in follow_up_questions[:3])
+        return f"{text}\n\n### Follow-up questions\n{follow_up_block}"

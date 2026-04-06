@@ -41,6 +41,13 @@ SUMMARY_SECTION_HINTS = (
     "insights",
     "main takeaways",
 )
+FOLLOW_UP_SECTION_HINTS = (
+    "follow-up questions",
+    "follow up questions",
+    "next questions",
+    "questions to ask next",
+    "you could also ask",
+)
 FOLLOW_UP_SUMMARY_PATTERNS = (
     re.compile(r"^would you like\b", re.IGNORECASE),
     re.compile(r"^do you want\b", re.IGNORECASE),
@@ -256,9 +263,16 @@ def _looks_like_heading(line: str) -> bool:
     return normalized in SUMMARY_SECTION_HINTS
 
 
+def _looks_like_follow_up_heading(line: str) -> bool:
+    normalized = _clean_summary_line(line).lower()
+    return normalized in FOLLOW_UP_SECTION_HINTS
+
+
 def _should_skip_summary_line(line: str) -> bool:
     cleaned = _clean_summary_line(line)
     if not cleaned:
+        return True
+    if cleaned.endswith("?") or _looks_like_follow_up_heading(cleaned):
         return True
     return any(pattern.match(cleaned) for pattern in FOLLOW_UP_SUMMARY_PATTERNS)
 
@@ -309,6 +323,10 @@ def _build_insight_summary(response: str) -> str:
                 break
             if _looks_like_heading(stripped) and section_lines:
                 break
+            if _looks_like_follow_up_heading(stripped):
+                if section_lines:
+                    break
+                continue
             section_lines.append(stripped)
         bullets = _summary_bullets_from_lines(section_lines)
         if bullets:

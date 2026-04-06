@@ -1784,16 +1784,35 @@ function buildChartCard(event) {
   const card = document.createElement("div");
   card.className = "chart-card";
 
-  if (event.title) {
-    const title = document.createElement("div");
-    title.className = "chart-title";
-    title.textContent = event.title;
-    card.appendChild(title);
-  }
+  const summary = summarizePlotlyFigure(event.chart_json);
+  const descriptor = summary?.descriptor || chartTypeDescriptor(summary?.chartType);
+  const chips = [
+    descriptor.badge,
+    summary?.seriesLabel,
+    summary?.axisSummary,
+  ].filter(Boolean);
+  const chartDetails = renderVisualizationDetails(event, {
+    includeQuestion: true,
+    includeBestFor: true,
+    includeWatchOut: false,
+  });
 
-  const container = document.createElement("div");
-  container.className = "chart-container";
-  card.appendChild(container);
+  card.innerHTML = `
+    <div class="chart-card-header">
+      <div class="chart-card-copy">
+        <div class="chart-card-kicker">Selected chart</div>
+        <div class="chart-title">${escHtml(event.title || "Chart")}</div>
+        <div class="chart-card-sub">${escHtml(descriptor.note)}</div>
+        ${chartDetails ? `<div class="chart-card-details">${chartDetails}</div>` : ""}
+      </div>
+      <div class="chart-card-meta">
+        ${chips.map((chip) => `<span class="chart-pill">${escHtml(chip)}</span>`).join("")}
+      </div>
+    </div>
+    <div class="chart-container"></div>
+  `;
+
+  const container = card.querySelector(".chart-container");
   renderPlotlyFigure(container, event.chart_json);
 
   return card;
@@ -1944,54 +1963,131 @@ function buildVisualOptionsCard(event) {
   }
 
   const recommendedId = event.recommended_option_id || options[0].id;
+  const optionSummaries = options.map((option) => ({
+    option,
+    summary: summarizePlotlyFigure(option.chart_json),
+  }));
+  const recommendedOption = optionSummaries.find((item) => item.option.id === recommendedId) || optionSummaries[0];
+  const recommendedDescriptor = chartTypeDescriptor(recommendedOption?.summary?.chartType || recommendedOption?.option?.chart_type);
+  const sourceTitle = event.source_title || event.title || "Visualization options";
+  const recommendedDetails = renderVisualizationDetails(recommendedOption?.option, {
+    includeQuestion: true,
+    includeBestFor: true,
+    includeWatchOut: true,
+  });
   card.innerHTML = `
     <div class="visual-options-header">
       <div class="visual-options-kicker">Visualization Studio</div>
-      <div class="visual-options-title">${escHtml(event.title || "Visualization options")}</div>
-      <div class="visual-options-sub">Compare a few polished chart directions before committing to one.</div>
+      <div class="visual-options-title">${escHtml(sourceTitle)}</div>
+      <div class="visual-options-sub">Compare a few executive-ready chart directions before committing to one.</div>
+    </div>
+    <div class="visual-recommendation">
+      <div class="visual-recommendation-copy">
+        <div class="visual-recommendation-label">Recommended first</div>
+        <div class="visual-recommendation-title"></div>
+        <div class="visual-recommendation-reason"></div>
+        <div class="visual-recommendation-details"></div>
+      </div>
+      <div class="visual-recommendation-chips"></div>
     </div>
     <div class="visual-options-grid"></div>
     <div class="visual-preview">
       <div class="visual-preview-copy">
-        <div class="visual-preview-title"></div>
+        <div class="visual-preview-topline">
+          <div>
+            <div class="visual-preview-label">Live preview</div>
+            <div class="visual-preview-title"></div>
+          </div>
+          <div class="visual-preview-meta"></div>
+        </div>
         <div class="visual-preview-reason"></div>
+        <div class="visual-preview-details"></div>
       </div>
       <div class="chart-container visual-preview-chart"></div>
     </div>
   `;
 
   const grid = card.querySelector(".visual-options-grid");
+  const recommendationTitle = card.querySelector(".visual-recommendation-title");
+  const recommendationReason = card.querySelector(".visual-recommendation-reason");
+  const recommendationDetails = card.querySelector(".visual-recommendation-details");
+  const recommendationChips = card.querySelector(".visual-recommendation-chips");
   const previewTitle = card.querySelector(".visual-preview-title");
   const previewReason = card.querySelector(".visual-preview-reason");
+  const previewDetails = card.querySelector(".visual-preview-details");
+  const previewMeta = card.querySelector(".visual-preview-meta");
   const previewChart = card.querySelector(".visual-preview-chart");
 
+  if (recommendedOption) {
+    recommendationTitle.textContent = recommendedOption.option.title || recommendedDescriptor.label;
+    recommendationReason.textContent = recommendedOption.option.reason || recommendedDescriptor.note;
+    recommendationDetails.innerHTML = recommendedDetails || "";
+    recommendationChips.innerHTML = [
+      recommendedDescriptor.badge,
+      recommendedDescriptor.label,
+      recommendedOption.summary?.seriesLabel,
+    ]
+      .filter(Boolean)
+      .map((chip) => `<span class="chart-pill">${escHtml(chip)}</span>`)
+      .join("");
+  }
+
   const setActiveOption = (option) => {
+    const summary = summarizePlotlyFigure(option.chart_json);
+    const descriptor = chartTypeDescriptor(summary?.chartType || option.chart_type);
+    const optionDetails = renderVisualizationDetails(option, {
+      includeQuestion: true,
+      includeBestFor: true,
+      includeWatchOut: true,
+      compact: true,
+    });
     grid.querySelectorAll(".visual-option-btn").forEach((button) => {
       button.classList.toggle("active", button.dataset.optionId === option.id);
     });
     previewTitle.textContent = option.title || chartTypeLabel(option.chart_type);
-    previewReason.textContent = option.reason || "A recommended way to visualize this table.";
+    previewReason.textContent = option.reason || descriptor.note;
+    previewDetails.innerHTML = optionDetails || "";
+    previewMeta.innerHTML = [
+      descriptor.badge,
+      summary?.seriesLabel,
+      summary?.axisSummary,
+    ]
+      .filter(Boolean)
+      .map((chip) => `<span class="chart-pill">${escHtml(chip)}</span>`)
+      .join("");
     renderPlotlyFigure(previewChart, option.chart_json);
   };
 
-  options.forEach((option) => {
+  optionSummaries.forEach(({ option, summary }) => {
+    const descriptor = chartTypeDescriptor(summary?.chartType || option.chart_type);
+    const optionDetails = renderVisualizationDetails(option, {
+      includeQuestion: true,
+      includeBestFor: true,
+      includeWatchOut: true,
+      compact: true,
+    });
     const button = document.createElement("button");
     button.type = "button";
     button.className = "visual-option-btn";
     button.dataset.optionId = option.id;
     button.innerHTML = `
       <span class="visual-option-topline">
-        <span class="visual-option-type">${escHtml(chartTypeLabel(option.chart_type))}</span>
-        ${option.id === recommendedId ? '<span class="visual-option-badge">Recommended</span>' : ""}
+        <span class="visual-option-type">${escHtml(descriptor.label)}</span>
+        ${option.id === recommendedId ? '<span class="visual-option-badge">Recommended</span>' : `<span class="visual-option-badge visual-option-badge-muted">${escHtml(descriptor.badge)}</span>`}
       </span>
       <span class="visual-option-title">${escHtml(option.title || chartTypeLabel(option.chart_type))}</span>
-      <span class="visual-option-reason">${escHtml(option.reason || "")}</span>
+      <span class="visual-option-reason">${escHtml(option.reason || descriptor.note)}</span>
+      ${optionDetails ? `<div class="visual-option-details">${optionDetails}</div>` : ""}
+      <span class="visual-option-footer">
+        <span class="chart-pill chart-pill-soft">${escHtml(descriptor.badge)}</span>
+        ${summary?.seriesLabel ? `<span class="chart-pill chart-pill-soft">${escHtml(summary.seriesLabel)}</span>` : ""}
+      </span>
     `;
     button.addEventListener("click", () => setActiveOption(option));
     grid.appendChild(button);
   });
 
-  setActiveOption(options.find((option) => option.id === recommendedId) || options[0]);
+  setActiveOption((optionSummaries.find((item) => item.option.id === recommendedId) || optionSummaries[0]).option);
   return card;
 }
 
@@ -2005,19 +2101,45 @@ function renderPlotlyFigure(container, chartJson) {
 
     try {
       const fig = JSON.parse(chartJson);
-      const layout = Object.assign({
-        paper_bgcolor: "rgba(0,0,0,0)",
-        plot_bgcolor: "rgba(248,251,255,0.9)",
-        font: { family: "Inter, sans-serif", size: 12, color: "#475569" },
-        margin: { t: 20, r: 16, b: 42, l: 46 },
-        showlegend: true,
-        legend: { orientation: "h", y: -0.22, x: 0 },
-      }, fig.layout || {});
+      const data = Array.isArray(fig.data) ? fig.data : [];
+      const chartType = normalizeChartType(data[0]?.type || fig?.layout?.meta?.chartType || "");
+      const multiSeries = data.length > 1;
+      const layout = Object.assign({}, fig.layout || {});
+      layout.paper_bgcolor = "rgba(0,0,0,0)";
+      layout.plot_bgcolor = "rgba(248,251,255,0.95)";
+      layout.font = Object.assign({ family: "Inter, sans-serif", size: 12, color: "#334155" }, layout.font || {});
+      layout.margin = Object.assign({ t: 28, r: 20, b: 56, l: 56 }, layout.margin || {});
+      layout.showlegend = multiSeries || chartType === "pie" || chartType === "donut";
+      layout.legend = Object.assign({
+        orientation: multiSeries ? "h" : "v",
+        y: multiSeries ? -0.22 : 1,
+        x: 0,
+        bgcolor: "rgba(255,255,255,0.78)",
+        bordercolor: "rgba(203,213,225,0.65)",
+        borderwidth: 1,
+      }, layout.legend || {});
+      layout.hoverlabel = Object.assign({
+        bgcolor: "#FFFFFF",
+        bordercolor: "#CBD5E1",
+        font: { color: "#0F172A" },
+      }, layout.hoverlabel || {});
+      if (!layout.hovermode) {
+        layout.hovermode = chartType === "scatter" || chartType === "box" || chartType === "heatmap" ? "closest" : "x unified";
+      }
+      layout.bargap = layout.bargap ?? 0.22;
+      layout.bargroupgap = layout.bargroupgap ?? 0.08;
+      layout.uirevision = layout.uirevision || "hr-viz";
+      layout.transition = Object.assign({ duration: 220, easing: "cubic-in-out" }, layout.transition || {});
       delete layout.title;
-      Plotly.newPlot(container, fig.data || [], layout, {
+      if (typeof Plotly.purge === "function") {
+        Plotly.purge(container);
+      }
+      Plotly.newPlot(container, data, layout, {
         responsive: true,
         displayModeBar: false,
         displaylogo: false,
+        scrollZoom: true,
+        doubleClick: "reset",
       });
     } catch (error) {
       container.textContent = `Chart render error: ${error.message}`;
@@ -2054,9 +2176,159 @@ function shouldAttachTableContext(message) {
 function requestVisualizationOptions(tableContext) {
   if (!tableContext?.rows?.length) return;
   state.pendingTableContext = buildTableContext(tableContext.title, tableContext.rows);
-  chatInput.value = "Suggest 3 top-quality visualization options for this table and recommend the best one.";
+  chatInput.value = "Suggest 3 executive-ready visualization options for this table, emphasize clarity and comparison, and recommend the best one.";
   onInputChange();
   handleSend();
+}
+
+function normalizeChartType(chartType) {
+  return String(chartType || "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function safeParsePlotlyFigure(chartJson) {
+  try {
+    return JSON.parse(chartJson);
+  } catch {
+    return null;
+  }
+}
+
+function renderVisualizationDetails(option, config = {}) {
+  if (!option || typeof option !== "object") return "";
+
+  const includeQuestion = config.includeQuestion !== false;
+  const includeBestFor = config.includeBestFor !== false;
+  const includeWatchOut = Boolean(config.includeWatchOut);
+  const compact = Boolean(config.compact);
+  const rows = [];
+
+  const addRow = (label, value, tone = "") => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    rows.push(`
+      <div class="visual-detail-row${tone ? ` ${tone}` : ""}">
+        <span class="visual-detail-label">${escHtml(label)}</span>
+        <span class="visual-detail-value">${escHtml(text)}</span>
+      </div>
+    `);
+  };
+
+  if (includeQuestion) {
+    addRow("Business question", option.business_question || option.businessQuestion || "");
+  }
+  if (includeBestFor) {
+    addRow("Best for", option.best_for || option.bestFor || "", "best-for");
+  }
+  if (includeWatchOut) {
+    addRow("Watch out", option.watch_out || option.watchOut || "", "watch-out");
+  }
+
+  if (!rows.length) return "";
+
+  return `
+    <div class="visual-details${compact ? " compact" : ""}">
+      ${rows.join("")}
+    </div>
+  `;
+}
+
+function chartTypeDescriptor(chartType) {
+  switch (normalizeChartType(chartType)) {
+    case "bar":
+      return {
+        label: "Bar chart",
+        badge: "Ranking",
+        note: "Best for comparing categories side by side and making the ranking obvious.",
+      };
+    case "horizontal_bar":
+      return {
+        label: "Horizontal bar",
+        badge: "Ranking",
+        note: "Best when the categories have longer labels and need more breathing room.",
+      };
+    case "stacked_bar":
+      return {
+        label: "Stacked bar",
+        badge: "Composition",
+        note: "Best for showing totals and the mix behind each category in one view.",
+      };
+    case "line":
+      return {
+        label: "Line chart",
+        badge: "Trend",
+        note: "Best for change over an ordered sequence or time-based progression.",
+      };
+    case "area":
+      return {
+        label: "Area chart",
+        badge: "Magnitude",
+        note: "Best when the size of the movement matters as much as the trend itself.",
+      };
+    case "scatter":
+      return {
+        label: "Scatter plot",
+        badge: "Relationship",
+        note: "Best for checking spread, clusters, and relationships between two measures.",
+      };
+    case "histogram":
+      return {
+        label: "Histogram",
+        badge: "Distribution",
+        note: "Best for showing whether values cluster tightly or spread widely.",
+      };
+    case "box":
+      return {
+        label: "Box plot",
+        badge: "Spread",
+        note: "Best for comparing variation and outliers across groups.",
+      };
+    case "pie":
+    case "donut":
+      return {
+        label: normalizeChartType(chartType) === "donut" ? "Donut chart" : "Pie chart",
+        badge: "Share",
+        note: "Best only when a small set of categories needs a simple share view.",
+      };
+    case "heatmap":
+      return {
+        label: "Heatmap",
+        badge: "Hotspots",
+        note: "Best for spotting the strongest and weakest combinations across two dimensions.",
+      };
+    default:
+      return {
+        label: chartTypeLabel(chartType),
+        badge: "Custom",
+        note: "A flexible chart view for executive review.",
+      };
+  }
+}
+
+function summarizePlotlyFigure(chartJson) {
+  const fig = safeParsePlotlyFigure(chartJson);
+  if (!fig) return null;
+
+  const data = Array.isArray(fig.data) ? fig.data : [];
+  const layout = fig.layout || {};
+  const chartType = normalizeChartType(data[0]?.type || layout?.meta?.chartType || "");
+  const descriptor = chartTypeDescriptor(chartType);
+  const seriesCount = data.length;
+  const traceNames = data
+    .map((trace) => String(trace?.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const xAxisTitle = String(layout?.xaxis?.title?.text || layout?.xaxis?.title || "").trim();
+  const yAxisTitle = String(layout?.yaxis?.title?.text || layout?.yaxis?.title || "").trim();
+  const axisSummary = xAxisTitle && yAxisTitle ? `${xAxisTitle} vs ${yAxisTitle}` : (xAxisTitle || yAxisTitle || "");
+
+  return {
+    chartType,
+    descriptor,
+    seriesCount,
+    seriesLabel: seriesCount > 1 ? `${seriesCount} series` : "Single series",
+    traceNames,
+    axisSummary,
+  };
 }
 
 function chartTypeLabel(chartType) {
@@ -2571,7 +2843,9 @@ function isSectionLabelLine(line) {
 function isPipeTableLine(line) {
   const trimmed = String(line || "").trim();
   const pipeCount = (trimmed.match(/\|/g) || []).length;
-  return pipeCount >= 2 && (trimmed.startsWith("|") || trimmed.endsWith("|"));
+  if (pipeCount < 2) return false;
+  if (trimmed.startsWith("|") || trimmed.endsWith("|")) return true;
+  return trimmed.split("|").filter((cell) => cell.trim()).length >= 3;
 }
 
 function splitMarkdownTableRow(line) {
@@ -2580,13 +2854,25 @@ function splitMarkdownTableRow(line) {
 }
 
 function isMarkdownTableSeparator(row) {
-  return Array.isArray(row) && row.length > 0 && row.every((cell) => /^:?-{3,}:?$/.test(cell));
+  return Array.isArray(row) && row.length > 0 && row.every((cell) => /^:?-{2,}:?$/.test(String(cell || "").trim()));
 }
 
 function normalizeMarkdownTableRow(row, columnCount) {
   const cells = Array.isArray(row) ? row.slice(0, columnCount) : [];
   while (cells.length < columnCount) cells.push("");
   return cells;
+}
+
+function getMarkdownTableAlignment(cell) {
+  const trimmed = String(cell || "").trim();
+  const isCentered = trimmed.startsWith(":") && trimmed.endsWith(":");
+  if (isCentered) return "center";
+  if (trimmed.endsWith(":")) return "right";
+  return "left";
+}
+
+function renderMarkdownTableCell(tag, content, alignment) {
+  return `<${tag} class="align-${alignment}">${renderInline(content)}</${tag}>`;
 }
 
 function renderMarkdownTable(lines) {
@@ -2599,6 +2885,7 @@ function renderMarkdownTable(lines) {
 
   const header = rows[0];
   const columnCount = header.length;
+  const alignments = normalizeMarkdownTableRow(rows[1], columnCount).map(getMarkdownTableAlignment);
   const bodyRows = rows
     .slice(2)
     .map((row) => normalizeMarkdownTableRow(row, columnCount))
@@ -2608,9 +2895,9 @@ function renderMarkdownTable(lines) {
     return "";
   }
 
-  const headHtml = header.map((cell) => `<th>${renderInline(cell)}</th>`).join("");
+  const headHtml = header.map((cell, index) => renderMarkdownTableCell("th", cell, alignments[index] || "left")).join("");
   const bodyHtml = bodyRows.map((row) => {
-    const cells = row.map((cell) => `<td>${renderInline(cell)}</td>`).join("");
+    const cells = row.map((cell, index) => renderMarkdownTableCell("td", cell, alignments[index] || "left")).join("");
     return `<tr>${cells}</tr>`;
   }).join("");
 
@@ -2633,7 +2920,12 @@ function formatCell(value) {
 function appendErrorBubble(parent, message) {
   const el = document.createElement("div");
   el.style.cssText = "padding:10px 14px; background:#FEF2F2; border:1px solid #FECACA; border-radius:10px; color:#DC2626; font-size:13px;";
-  el.textContent = `Warning: ${message}`;
+  const text = String(message || "");
+  if (/rate limit|too many requests/i.test(text)) {
+    el.textContent = `Temporary provider slowdown: ${text} If the result above is already visible, you can keep using it and retry the written summary in a moment.`;
+  } else {
+    el.textContent = `Warning: ${text}`;
+  }
   parent.appendChild(el);
   scrollToBottom();
 }
