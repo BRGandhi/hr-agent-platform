@@ -273,6 +273,14 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertTrue(allowed, reason)
 
+    def test_gender_attrition_question_is_recognized_as_hr(self):
+        requested_metrics = self.access_profile.requested_metrics_for_question("Are women attriting more than men?")
+        allowed, reason = self.access_profile.can_access_question("Are women attriting more than men?")
+
+        self.assertIn("attrition", requested_metrics)
+        self.assertIn("demographics", requested_metrics)
+        self.assertTrue(allowed, reason)
+
     def test_capability_question_routes_to_policy_context(self):
         agent = self._make_agent()
 
@@ -297,6 +305,35 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("### Follow-up questions", final_text)
         self.assertNotIn("This platform only supports HR insights", final_text)
         self.assertNotIn("Out of scope for your role", final_text)
+
+    def test_comparative_attrition_follow_up_uses_prior_hr_context(self):
+        agent = self._make_agent()
+        agent.conversation_history = [
+            {"role": "user", "content": "Show attrition by department for Business Units"},
+            {"role": "assistant", "content": "Sales has the highest attrition rate, followed by Human Resources."},
+        ]
+
+        access_check_message, _ = agent._build_access_check_message(
+            "Which groups have high attrition?",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
+
+        self.assertIn("follow-up to prior hr question", access_check_message.lower())
+        self.assertIn("attrition by department", access_check_message.lower())
+        allowed, reason = self.access_profile.can_access_question(access_check_message)
+        self.assertTrue(allowed, reason)
+
+    def test_ambiguous_comparative_prompt_gets_clarification_before_guardrail(self):
+        agent = self._make_agent(llm_client=ExplodingLLMClient())
+
+        events = list(agent.chat("Are women doing worse than men?", self.access_profile))
+
+        self.assertEqual(len(events), 1)
+        final_text = events[0]["text"]
+        self.assertIn("Which HR measure do you want me to compare", final_text)
+        self.assertIn("headcount, attrition, tenure, satisfaction", final_text)
+        self.assertNotIn("This platform only supports HR insights", final_text)
 
     def test_underspecified_report_request_triggers_clarifying_question_before_generation(self):
         agent = self._make_agent(llm_client=ExplodingLLMClient())

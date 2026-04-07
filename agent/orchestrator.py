@@ -136,6 +136,47 @@ CONTEXTUAL_REPLY_PHRASES = (
     "that one",
     "those ones",
 )
+COMPARATIVE_FOLLOW_UP_STARTERS = ("which", "what about", "how about", "are", "is", "do", "does", "who")
+COMPARATIVE_FOLLOW_UP_TERMS = (
+    "group",
+    "groups",
+    "women",
+    "woman",
+    "men",
+    "man",
+    "female",
+    "male",
+    "gender",
+    "demographic",
+    "department",
+    "departments",
+    "job role",
+    "job roles",
+    "job level",
+    "job levels",
+    "team",
+    "teams",
+    "cohort",
+    "cohorts",
+    "business unit",
+    "business units",
+)
+COMPARATIVE_ANALYSIS_TERMS = (
+    "more than",
+    "less than",
+    "higher",
+    "lower",
+    "highest",
+    "lowest",
+    "most",
+    "least",
+    "compare",
+    "comparison",
+    "versus",
+    "vs",
+    "difference",
+    "different",
+)
 FOLLOW_UP_REFERENCE_WORDS = {"this", "that", "it", "those", "them", "same"}
 FOLLOW_UP_SECTION_MARKERS = (
     "follow-up questions",
@@ -335,9 +376,95 @@ class HRAgent:
             return True
         if any(word in FOLLOW_UP_REFERENCE_WORDS for word in words):
             return True
+        if self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return True
 
         mentions_hr_scope = any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS)
         return not mentions_hr_scope
+
+    def _looks_like_comparative_hr_follow_up(
+        self,
+        user_message: str,
+        access_profile: AccessProfile | None = None,
+    ) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+
+        has_starter = any(
+            normalized == starter or normalized.startswith(f"{starter} ")
+            for starter in COMPARATIVE_FOLLOW_UP_STARTERS
+        )
+        if not has_starter:
+            return False
+
+        mentions_segment = any(term in normalized for term in COMPARATIVE_FOLLOW_UP_TERMS)
+        mentions_comparison = any(term in normalized for term in COMPARATIVE_ANALYSIS_TERMS)
+        requested_metrics = access_profile.requested_metrics_for_question(user_message) if access_profile else set()
+        return mentions_segment or mentions_comparison or bool(requested_metrics)
+
+    def _clarification_for_ambiguous_hr_intent(
+        self,
+        user_message: str,
+        reason: str,
+        follow_up_context: dict[str, str],
+        access_profile: AccessProfile,
+    ) -> str:
+        if "This platform only supports HR insights" not in str(reason or ""):
+            return ""
+
+        normalized = self._normalized_message(user_message)
+        if not normalized or len(normalized.split()) > 12:
+            return ""
+
+        if not self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return ""
+
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return (
+                "Do you want me to treat this as an HR follow-up to your earlier question?\n"
+                f"- Prior HR question: {prior_question}\n"
+                "- If yes, tell me the workforce measure and breakdown you want, such as attrition by gender, department, job role, or job level."
+            )
+
+        allowed_metrics = [metric for metric in access_profile.allowed_metrics if metric != "policy"]
+        allowed_metric_text = ", ".join(allowed_metrics) if allowed_metrics else "approved workforce metrics"
+        return (
+            "Do you want an HR comparison or breakdown?\n"
+            f"- For example, you can ask about {allowed_metric_text}.\n"
+            "- You can then cut that by gender, department, job role, job level, or another workforce group."
+        )
+
+    def _clarification_for_underspecified_comparison(
+        self,
+        user_message: str,
+        access_profile: AccessProfile,
+        follow_up_context: dict[str, str],
+    ) -> str:
+        if not self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return ""
+
+        requested_metrics = access_profile.requested_metrics_for_question(user_message)
+        substantive_metrics = {metric for metric in requested_metrics if metric not in {"demographics", "policy"}}
+        if substantive_metrics:
+            return ""
+
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return (
+                "Which HR measure do you want me to compare in this follow-up?\n"
+                f"- Prior HR question: {prior_question}\n"
+                "- For example, I can compare attrition, headcount, satisfaction, or tenure by gender or another workforce group."
+            )
+
+        allowed_metrics = [metric for metric in access_profile.allowed_metrics if metric not in {"policy", "demographics"}]
+        allowed_metric_text = ", ".join(allowed_metrics) if allowed_metrics else "approved workforce metrics"
+        return (
+            "Which HR measure do you want me to compare?\n"
+            f"- For example: {allowed_metric_text}.\n"
+            "- Then tell me the workforce groups you want compared, such as women vs men, departments, job roles, or job levels."
+        )
 
     def _build_contextual_message(
         self,
@@ -524,7 +651,33 @@ class HRAgent:
         )
         allowed, reason = access_profile.can_access_question(access_check_message)
         if not allowed:
+            clarification_text = self._clarification_for_ambiguous_hr_intent(
+                user_message,
+                reason,
+                follow_up_context,
+                access_profile,
+            )
+            if clarification_text:
+                self.conversation_history.append({"role": "user", "content": user_message})
+                self._trim_history()
+                self.conversation_history.append({"role": "assistant", "content": clarification_text})
+                self._trim_history()
+                yield {"type": "final_text", "text": clarification_text}
+                return
             yield {"type": "final_text", "text": reason}
+            return
+
+        comparison_clarification = self._clarification_for_underspecified_comparison(
+            user_message,
+            access_profile,
+            follow_up_context,
+        )
+        if comparison_clarification:
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self._trim_history()
+            self.conversation_history.append({"role": "assistant", "content": comparison_clarification})
+            self._trim_history()
+            yield {"type": "final_text", "text": comparison_clarification}
             return
 
         route = self._route_request(access_check_message, active_table_context, access_profile)
