@@ -263,7 +263,7 @@ function handleDynamicButtonClick(event) {
 
   const topicButton = event.target.closest(".metric-chip");
   if (topicButton && metricExamplesEl?.contains(topicButton)) {
-    setActiveTopic(topicButton.dataset.topic || "");
+    toggleMetricTopic(topicButton.dataset.topic || "");
     return true;
   }
 
@@ -680,6 +680,52 @@ function preferredQuestionsFromHistory() {
   return preferredQuestionItemsFromHistory().map((item) => item.question).slice(0, 5);
 }
 
+function isFeatureableHistoryQuestion(question) {
+  const normalized = String(question || "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  const thinFollowUps = new Set([
+    "yes",
+    "yes please",
+    "yeah",
+    "yep",
+    "sure",
+    "sure thing",
+    "ok",
+    "okay",
+    "please",
+    "go ahead",
+    "do it",
+    "sounds good",
+    "no",
+    "no thanks",
+    "not now",
+    "show me",
+    "show that",
+    "show it",
+    "show those",
+    "break it down",
+    "drill down",
+    "go deeper",
+    "dig deeper",
+    "more detail",
+    "more details",
+    "visualize it",
+    "chart it",
+    "plot it",
+    "turn it into",
+    "that one",
+    "those ones",
+  ]);
+  if (thinFollowUps.has(normalized)) return false;
+  if (/^(?:answer|respond to|explain|show)\s+question\s+\d+$/i.test(normalized)) return false;
+  if (/^question\s+\d+$/i.test(normalized)) return false;
+
+  const tokens = normalized.match(/[a-z0-9]+/g) || [];
+  if (!normalized.endsWith("?") && tokens.length <= 3) return false;
+  return true;
+}
+
 function preferredQuestionItemsFromHistory() {
   const favoriteQuestions = Array.isArray(state.historySummary.favoriteQuestions)
     ? state.historySummary.favoriteQuestions
@@ -690,7 +736,7 @@ function preferredQuestionItemsFromHistory() {
   favoriteQuestions.forEach((item) => {
     const question = String(item?.question || "").trim();
     const normalized = question.toLowerCase();
-    if (!question || seen.has(normalized)) return;
+    if (!question || !isFeatureableHistoryQuestion(question) || seen.has(normalized)) return;
     seen.add(normalized);
     unique.push({
       ...item,
@@ -706,6 +752,7 @@ function topicMetricKey(topic) {
   const normalized = String(topic || "").trim().toLowerCase();
   const mapping = {
     "headcount": "headcount",
+    "active headcount": "headcount",
     "active workforce": "headcount",
     "department mix": "headcount",
     "attrition rate": "attrition",
@@ -718,6 +765,14 @@ function topicMetricKey(topic) {
     "satisfaction pulse": "satisfaction",
     "demographic mix": "demographics",
     "access policy guidance": "policy",
+  };
+  return mapping[normalized] || normalized;
+}
+
+function topicPromptKey(topic) {
+  const normalized = String(topic || "").trim().toLowerCase();
+  const mapping = {
+    "active workforce": "active headcount",
   };
   return mapping[normalized] || normalized;
 }
@@ -938,42 +993,92 @@ function buildCenterKpiCards() {
   return cards.slice(0, 6);
 }
 
-function buildCenterPromptCards(existingFamilies = []) {
+function centerPromptNote(topic, reuseCount = 1, feedbackScore = 0) {
+  if (feedbackScore > 0) {
+    return "A helpful question from prior HR work.";
+  }
+  if (reuseCount > 1) {
+    return "A question you have revisited across prior chats.";
+  }
+
+  const topicKey = topicMetricKey(topic);
+  const notes = {
+    "headcount": "A workforce question shaped by your recent history.",
+    "attrition": "Continue exploring recent attrition themes.",
+    "tenure": "Extend a recent tenure or promotion thread.",
+    "compensation": "Follow up on recent compensation questions.",
+    "performance": "Continue a recent performance discussion.",
+    "satisfaction": "Follow up on satisfaction and workforce risk.",
+    "demographics": "Extend a recent demographic mix question.",
+    "policy": "Review role-based access and guidance.",
+  };
+  return notes[topicKey] || "A recommended question based on your recent HR activity.";
+}
+
+function buildCenterPromptCards(existingCards = []) {
   const scopeName = state.accessProfile?.scope_name || "my business units";
   const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
   const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
   const prompts = [];
-  const used = new Set(existingFamilies);
+  const usedFamilies = new Set(existingCards.map((card) => card.familyKey || String(card.family || "").toLowerCase()));
+  const usedQuestions = new Set(
+    existingCards
+      .map((card) => String(card.prompt || card.question || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
 
-  if (!used.has("headcount") && (hasAllMetrics || allowed.has("headcount"))) {
+  function pushPromptCard(label, question, note) {
+    const normalizedQuestion = String(question || "").trim().toLowerCase();
+    if (!normalizedQuestion || usedQuestions.has(normalizedQuestion)) return false;
+    usedQuestions.add(normalizedQuestion);
     prompts.push({
       family: "Prompt",
-      label: "Headcount",
-      question: `What is the total headcount for ${scopeName}?`,
-      note: "Quick view of total headcount and department mix",
+      label: label || "Suggested next question",
+      question,
+      note,
       cta: "Ask this question",
-      prompt: `What is the total headcount for ${scopeName}?`,
+      prompt: question,
     });
+    return true;
   }
-  if (!used.has("attrition") && (hasAllMetrics || allowed.has("attrition"))) {
-    prompts.push({
-      family: "Prompt",
-      label: "Attrition",
-      question: `Show attrition by department for ${scopeName}`,
-      note: "Spot attrition hotspots and department risk",
-      cta: "Ask this question",
-      prompt: `Show attrition by department for ${scopeName}`,
-    });
+
+  preferredQuestionItemsFromHistory().forEach((item) => {
+    const question = String(item?.question || "").trim();
+    const topics = Array.isArray(item?.topics) ? item.topics.filter(Boolean) : [];
+    const primaryTopic = topics[0] || "Suggested next question";
+    const reuseCount = Number(item?.reuse_count || 1);
+    const feedbackScore = Number(item?.feedback_score || 0);
+    pushPromptCard(primaryTopic, question, centerPromptNote(primaryTopic, reuseCount, feedbackScore));
+  });
+
+  preferredTopicsFromHistory().forEach((topic) => {
+    const topicQuestions = buildTopicQuestions(topic, state.accessProfile);
+    const nextQuestion = topicQuestions.find((question) => !usedQuestions.has(String(question || "").trim().toLowerCase()));
+    if (nextQuestion) {
+      pushPromptCard(topic, nextQuestion, centerPromptNote(topic));
+    }
+  });
+
+  if (!usedFamilies.has("headcount") && (hasAllMetrics || allowed.has("headcount"))) {
+    pushPromptCard(
+      "Headcount",
+      `What is the total headcount for ${scopeName}?`,
+      "Quick view of total headcount and department mix",
+    );
   }
-  if (!used.has("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
-    prompts.push({
-      family: "Prompt",
-      label: "Promotion",
-      question: `Show employees with recent promotions in ${scopeName}`,
-      note: "Review recent promotions and salary movement",
-      cta: "Ask this question",
-      prompt: `Show employees with recent promotions in ${scopeName}`,
-    });
+  if (!usedFamilies.has("attrition") && (hasAllMetrics || allowed.has("attrition"))) {
+    pushPromptCard(
+      "Attrition",
+      `Show attrition by department for ${scopeName}`,
+      "Spot attrition hotspots and department risk",
+    );
+  }
+  if (!usedFamilies.has("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
+    pushPromptCard(
+      "Promotion",
+      `Show employees with recent promotions in ${scopeName}`,
+      "Review recent promotions and salary movement",
+    );
   }
 
   const fallbackPrompts = [
@@ -995,14 +1100,7 @@ function buildCenterPromptCards(existingFamilies = []) {
   ];
 
   fallbackPrompts.forEach((item) => {
-    prompts.push({
-      family: "Prompt",
-      label: item.label,
-      question: item.question,
-      note: item.note,
-      cta: "Ask this question",
-      prompt: item.question,
-    });
+    pushPromptCard(item.label, item.question, item.note);
   });
 
   return prompts;
@@ -1012,8 +1110,7 @@ function renderCenterKpiBoard() {
   if (!centerKpiBoard) return;
 
   const cards = buildCenterKpiCards();
-  const existingFamilies = cards.map((card) => card.familyKey || card.family.toLowerCase());
-  const promptCards = buildCenterPromptCards(existingFamilies);
+  const promptCards = buildCenterPromptCards(cards);
   const allCards = [...cards, ...promptCards].slice(0, 6);
 
   if (!allCards.length) {
@@ -1067,8 +1164,7 @@ function renderMetricExamples(profile) {
     metrics.push("Access policy guidance");
   }
 
-  state.activeTopic = "";
-  clearTopicSuggestions();
+  clearActiveTopicSelection();
   metricExamplesEl.innerHTML = metrics.map((metric) => `
     <button
       class="metric-chip"
@@ -1079,7 +1175,20 @@ function renderMetricExamples(profile) {
   `).join("");
 }
 
+function clearActiveTopicSelection() {
+  state.activeTopic = "";
+  metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => {
+    chip.classList.remove("active");
+    chip.setAttribute("aria-pressed", "false");
+  });
+  clearTopicSuggestions();
+}
+
 function setActiveTopic(topic) {
+  if (!topic) {
+    clearActiveTopicSelection();
+    return;
+  }
   state.activeTopic = topic;
   metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => {
     const isActive = chip.dataset.topic === topic;
@@ -1089,18 +1198,25 @@ function setActiveTopic(topic) {
   renderTopicSuggestions(topic, state.accessProfile);
 }
 
+function toggleMetricTopic(topic) {
+  if (!topic) {
+    clearActiveTopicSelection();
+    return;
+  }
+  if (state.activeTopic === topic) {
+    clearActiveTopicSelection();
+    return;
+  }
+  setActiveTopic(topic);
+}
+
 function toggleDiveTopic(topic) {
   state.activeDiveTopic = state.activeDiveTopic === topic ? "" : topic;
   renderDiveBackIn();
   if (state.activeDiveTopic) {
     setActiveTopic(state.activeDiveTopic);
   } else {
-    state.activeTopic = "";
-    metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => {
-      chip.classList.remove("active");
-      chip.setAttribute("aria-pressed", "false");
-    });
-    clearTopicSuggestions();
+    clearActiveTopicSelection();
   }
 }
 
@@ -1133,7 +1249,7 @@ function renderTopicSuggestions(topic, profile) {
 }
 
 function buildTopicQuestions(topic, profile) {
-  const normalizedTopic = String(topic || "").toLowerCase();
+  const normalizedTopic = topicPromptKey(topic);
   const scopeName = profile?.scope_name || "my business units";
   const departments = profile?.allowed_departments || [];
   const primaryScope = departments.length === 1 ? departments[0] : scopeName;
@@ -1145,7 +1261,7 @@ function buildTopicQuestions(topic, profile) {
       `Which job roles have the highest headcount in ${scopeName}?`,
       `Turn the headcount breakdown for ${scopeName} into a visualization`,
     ],
-    "active workforce": [
+    "active headcount": [
       `What is the active headcount for ${scopeName}?`,
       `Generate an active headcount report for ${scopeName}`,
       `Show active headcount by department for ${scopeName}`,
@@ -2542,6 +2658,7 @@ async function submitFeedback(memoryId, vote, bar) {
       button.classList.toggle("active", isActive);
     });
     showToast(feedbackScore > 0 ? "Saved as a helpful response." : "Thanks. We'll avoid reusing that answer as a good example.");
+    await loadHistory();
   } catch (error) {
     showToast(error.message || "Could not save feedback.", true);
   }
@@ -2958,13 +3075,11 @@ function resetConversationUi() {
   state.lastTable = null;
   state.pendingTableContext = null;
   state.feedbackByMemory = {};
-  state.activeTopic = "";
   state.activeDiveTopic = "";
   state.activeTopbarPanel = "";
   state.relevantHistoryItems = [];
   state.pastHistoryItems = [];
-  metricExamplesEl?.querySelectorAll(".metric-chip").forEach((chip) => chip.classList.remove("active"));
-  clearTopicSuggestions();
+  clearActiveTopicSelection();
   closeTopbarReveal();
   const thread = messagesEl.querySelector(".msg-thread");
   if (thread) thread.remove();
@@ -2979,13 +3094,12 @@ function handleUnauthorized() {
   state.lastTable = null;
   state.pendingTableContext = null;
   state.feedbackByMemory = {};
-  state.activeTopic = "";
   state.activeDiveTopic = "";
   state.activeTopbarPanel = "";
   state.historySummary = { favoriteTopics: [], favoriteKpis: [], favoriteQuestions: [] };
   state.relevantHistoryItems = [];
   state.pastHistoryItems = [];
-  clearTopicSuggestions();
+  clearActiveTopicSelection();
   syncAuthUi();
   syncScopeUi();
   updateTopbarSub();

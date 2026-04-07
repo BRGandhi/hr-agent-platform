@@ -37,6 +37,8 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - Past chats are retained indefinitely by default, so the context layer can accumulate durable user history over time.
 - Each saved chat now stores the original question, full answer, feedback score, and a compact `insight_summary` used for sidebar recall and personalization.
 - Users can upvote or downvote responses, and positively rated answers can be surfaced later for similar questions.
+- Favorite-chat ranking now reflects both reuse frequency and positive feedback rather than only the most recent saved copy of a question.
+- Thin shorthand follow-ups such as `yes`, `show me`, or `answer question 1` are filtered out of featured history surfaces so the substantive HR question stays visible.
 - HR policy and schema reference documents are retrieved per question and injected into the system prompt.
 - The UI surfaces previously asked questions in the sidebar.
 - Clicking a saved favorite, relevant, or past chat now recalls the cached insight summary instead of rerunning the query.
@@ -76,6 +78,7 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 
 ### 10. Better in-chat continuity
 - Short follow-up replies such as `yes`, `job level`, `show me`, or `break it down` now inherit the current session context instead of being treated as brand-new standalone prompts.
+- Calculation-explanation follow-ups such as `show me how you calculated this metric` now inherit the prior HR result instead of falling into the generic guardrail path.
 - The agent carries the latest table context forward so follow-up charting and breakdown requests stay grounded in the last result.
 - Conversation history is still bounded by `MAX_CONVERSATION_HISTORY`, but within that window the platform is much better at staying on the same HR thread.
 
@@ -100,6 +103,7 @@ The newest generation of the agent is optimized around governed follow-up work i
 - Session-aware follow-ups: short replies now inherit the active HR question context before access validation runs.
 - Strong-match history retrieval: prior chats are only suggested when the new ask is genuinely close in topic and wording, avoiding noisy broad-memory recommendations.
 - Cached recall flow: sidebar chat recalls now return saved insight summaries and seed the active session context without forcing a fresh database query.
+- Methodology explanations: users can ask how a metric was calculated, which columns were used, or what the formula means, and the agent treats that as an in-scope HR explanation request.
 - Response quality upgrades: the browser renderer promotes section headings, preserves rich Markdown better, and presents metric summaries more cleanly.
 
 ## Architecture At A Glance
@@ -151,6 +155,7 @@ The current platform is not a single-prompt chatbot wrapped in an HR UI. It uses
 
 ### 2. Multi-layer context assembly
 - Short in-session follow-ups such as `yes`, `job level`, or `show me` are anchored to the latest meaningful HR turn.
+- Explanation follow-ups such as `how did you calculate this`, `which columns did you use`, or `give me the formula` are also anchored to the latest meaningful HR turn.
 - If the live session context is thin, the agent can fall back to recent stored memory for the same signed-in user.
 - The prompt builder merges access scope, recent memory, related memory, helpful prior answers, approved HR documents, and latest generated table context.
 
@@ -169,6 +174,7 @@ The current platform is not a single-prompt chatbot wrapped in an HR UI. It uses
 - `Favorite Chats` reflects high-signal prior work shaped by feedback and reuse patterns.
 - `Relevant Chats` is role-aware and intentionally strict.
 - `Past Chats` is the broader historical list across sessions for the signed-in user.
+- Thin shorthand follow-ups are intentionally filtered out of the featured-question path so the center board and favorite-chat surfaces keep emphasizing the underlying substantive HR ask.
 
 ## Fresh Start: Clone And Run
 

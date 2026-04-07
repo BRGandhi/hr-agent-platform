@@ -59,6 +59,20 @@ class AccessCapabilityLLMClient:
         )
 
 
+class CalculationExplanationLLMClient:
+    def create_response(self, system_prompt: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+        return LLMResponse(
+            text=(
+                "The metric is a snapshot calculation.\n\n"
+                "- Definition: recently promoted means `YearsSinceLastPromotion < 1`.\n"
+                "- Columns used: `Department` and `YearsSinceLastPromotion`.\n"
+                "- Formula: promotion rate = recently promoted employees / total headcount in the same department * 100."
+            ),
+            tool_calls=[],
+            stop_reason="end_turn",
+        )
+
+
 class ToolThenRateLimitLLMClient:
     def __init__(self):
         self.call_count = 0
@@ -393,6 +407,65 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertIn("follow-up to prior hr question", access_check_message.lower())
         self.assertIn("active headcount report", access_check_message.lower())
+
+    def test_metric_explanation_follow_up_uses_prior_hr_question_context(self):
+        agent = self._make_agent()
+        agent.conversation_history = [
+            {"role": "user", "content": "How many employees in Business Units were promoted in the last year?"},
+            {"role": "assistant", "content": "Total recently promoted: 581."},
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "Promotion rate by department ranges from 38.1% to 39.9%."},
+        ]
+
+        access_check_message, follow_up_context = agent._build_access_check_message(
+            "give me the details of the calculation, which columns you used and the formula",
+            table_context=None,
+            access_profile=self.access_profile,
+        )
+
+        self.assertIn("follow-up to prior hr question", access_check_message.lower())
+        self.assertIn("promoted in the last year", access_check_message.lower())
+        self.assertEqual(follow_up_context.get("question"), "How many employees in Business Units were promoted in the last year?")
+
+    def test_metric_explanation_follow_up_skips_report_clarification(self):
+        agent = self._make_agent(llm_client=CalculationExplanationLLMClient())
+        agent.conversation_history = [
+            {"role": "user", "content": "How many employees in Business Units were promoted in the last year?"},
+            {"role": "assistant", "content": "Total recently promoted: 581."},
+        ]
+
+        events = list(agent.chat("show me how you calculated this metric", self.access_profile))
+
+        final_text = events[-1]["text"]
+        self.assertIn("YearsSinceLastPromotion < 1", final_text)
+        self.assertIn("Columns used", final_text)
+        self.assertNotIn("Before I build that table", final_text)
+        self.assertNotIn("This platform only supports HR insights", final_text)
+
+    def test_metric_explanation_without_context_asks_for_clarification(self):
+        agent = self._make_agent(llm_client=ExplodingLLMClient())
+
+        events = list(agent.chat("give me the details of the calculation, which columns you used and the formula", self.access_profile))
+
+        self.assertEqual(len(events), 1)
+        final_text = events[0]["text"]
+        self.assertIn("Which HR metric or prior result do you want me to explain?", final_text)
+        self.assertIn("definition, columns used, formula", final_text)
+        self.assertNotIn("This platform only supports HR insights", final_text)
+
+    def test_thin_follow_up_memory_uses_prior_question_as_saved_title(self):
+        agent = self._make_agent(llm_client=DirectAnswerLLMClient())
+        agent.conversation_history = [
+            {"role": "user", "content": "Which teams in Business Units have the highest attrition risk?"},
+            {"role": "assistant", "content": "I can answer question 1 or question 2 next if you'd like."},
+        ]
+
+        events = list(agent.chat("answer question 1", self.access_profile))
+
+        self.assertEqual(events[-1]["type"], "final_text")
+        recent_memory = self.store.recent_memory(self.access_profile.email, limit=1)
+        self.assertEqual(len(recent_memory), 1)
+        self.assertEqual(recent_memory[0]["question"], "Which teams in Business Units have the highest attrition risk?")
 
     def test_visual_request_recovers_with_chart_when_rate_limit_hits_after_table(self):
         agent = self._make_agent(llm_client=ToolThenRateLimitLLMClient())

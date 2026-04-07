@@ -136,6 +136,28 @@ CONTEXTUAL_REPLY_PHRASES = (
     "that one",
     "those ones",
 )
+CALCULATION_EXPLANATION_PHRASES = (
+    "how you calculated",
+    "how did you calculate",
+    "how was this calculated",
+    "how you compute",
+    "how did you compute",
+    "how was this computed",
+    "how did you get",
+    "show your work",
+    "details of the calculation",
+    "details of this calculation",
+    "details of the metric",
+    "how this metric was calculated",
+    "which columns you used",
+    "which columns did you use",
+    "what columns you used",
+    "what columns did you use",
+    "give me the formula",
+    "show me the formula",
+    "metric definition",
+    "define this metric",
+)
 COMPARATIVE_FOLLOW_UP_STARTERS = ("which", "what about", "how about", "are", "is", "do", "does", "who")
 COMPARATIVE_FOLLOW_UP_TERMS = (
     "group",
@@ -277,6 +299,20 @@ class HRAgent:
         latest_assistant = self._latest_message_content("assistant").lower()
         return any(marker in latest_assistant for marker in CLARIFICATION_RESPONSE_MARKERS)
 
+    def _is_metric_explanation_request(self, user_message: str) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+        if any(phrase in normalized for phrase in CALCULATION_EXPLANATION_PHRASES):
+            return True
+        if "formula" in normalized:
+            return True
+        if ("calculation" in normalized or "calculated" in normalized or "computed" in normalized) and (
+            "column" in normalized or "metric" in normalized or "definition" in normalized or "outcome" in normalized
+        ):
+            return True
+        return False
+
     def _latest_user_context_anchor(self) -> str:
         fallback = ""
         for item in reversed(self.conversation_history):
@@ -289,6 +325,8 @@ class HRAgent:
                 fallback = content
 
             normalized = self._normalized_message(content)
+            if self._is_metric_explanation_request(content):
+                continue
             if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
                 return content
             if len(normalized.split()) > 4 or "?" in content:
@@ -313,6 +351,8 @@ class HRAgent:
                 fallback_response = response
 
             normalized = self._normalized_message(question)
+            if self._is_metric_explanation_request(question):
+                continue
             if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
                 return {"question": question, "response": response}
             if len(normalized.split()) > 4 or "?" in question:
@@ -362,6 +402,9 @@ class HRAgent:
         normalized = self._normalized_message(user_message)
         if not normalized:
             return False
+
+        if self._is_metric_explanation_request(user_message):
+            return True
 
         words = normalized.split()
         if len(words) > 8:
@@ -466,6 +509,21 @@ class HRAgent:
             "- Then tell me the workforce groups you want compared, such as women vs men, departments, job roles, or job levels."
         )
 
+    def _clarification_for_metric_explanation_request(
+        self,
+        user_message: str,
+        follow_up_context: dict[str, str],
+    ) -> str:
+        if not self._is_metric_explanation_request(user_message):
+            return ""
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return ""
+        return (
+            "Which HR metric or prior result do you want me to explain?\n"
+            "- I can walk through the definition, columns used, formula, filters, and how the result was derived."
+        )
+
     def _build_contextual_message(
         self,
         user_message: str,
@@ -481,6 +539,45 @@ class HRAgent:
         if prior_response:
             contextual_message += f" Prior assistant context: {prior_response[:260]}."
         return contextual_message, follow_up_context
+
+    def _should_promote_prior_question_for_memory(
+        self,
+        user_message: str,
+        access_profile: AccessProfile | None = None,
+    ) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return True
+        if normalized in GENERIC_FOLLOW_UP_REPLIES:
+            return True
+        if any(normalized == phrase for phrase in CONTEXTUAL_REPLY_PHRASES):
+            return True
+        if re.fullmatch(r"(?:answer|respond to|explain|show)\s+question\s+\d+", normalized):
+            return True
+        if re.fullmatch(r"question\s+\d+", normalized):
+            return True
+
+        if not normalized.endswith("?") and len(normalized.split()) <= 3:
+            requested_metrics = access_profile.requested_metrics_for_question(user_message) if access_profile else set()
+            if not requested_metrics:
+                return True
+        return False
+
+    def _memory_question_for_turn(
+        self,
+        user_message: str,
+        follow_up_context: dict[str, str],
+        access_profile: AccessProfile | None = None,
+    ) -> str:
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        raw_question = str(user_message or "").strip()
+        if not raw_question:
+            return prior_question
+        if not prior_question:
+            return raw_question
+        if self._should_promote_prior_question_for_memory(raw_question, access_profile):
+            return prior_question
+        return raw_question
 
     def _build_access_check_message(
         self,
@@ -511,6 +608,8 @@ class HRAgent:
         lowered = user_message.lower()
         if self._is_visualization_follow_up(user_message, table_context):
             return "visual_follow_up"
+        if self._is_metric_explanation_request(user_message):
+            return "policy"
         if access_profile and access_profile.is_access_capability_question(user_message):
             return "policy"
         if any(keyword in lowered for keyword in HISTORY_LOOKUP_KEYWORDS):
@@ -523,6 +622,8 @@ class HRAgent:
 
     def _looks_like_output_request(self, user_message: str, route: str) -> bool:
         lowered = self._normalized_message(user_message)
+        if self._is_metric_explanation_request(user_message):
+            return False
         has_output_noun = any(noun in lowered for noun in REPORT_OUTPUT_NOUNS)
         has_output_verb = any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in REPORT_OUTPUT_VERBS)
         employee_listing_request = bool(re.search(r"\b(show|list|export|download|give|provide)\b.*\bemployees?\b", lowered))
@@ -649,6 +750,18 @@ class HRAgent:
             active_table_context,
             access_profile,
         )
+        explanation_clarification = self._clarification_for_metric_explanation_request(
+            user_message,
+            follow_up_context,
+        )
+        if explanation_clarification:
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self._trim_history()
+            self.conversation_history.append({"role": "assistant", "content": explanation_clarification})
+            self._trim_history()
+            yield {"type": "final_text", "text": explanation_clarification}
+            return
+        memory_question = self._memory_question_for_turn(user_message, follow_up_context, access_profile)
         allowed, reason = access_profile.can_access_question(access_check_message)
         if not allowed:
             clarification_text = self._clarification_for_ambiguous_hr_intent(
@@ -736,6 +849,7 @@ class HRAgent:
                 error_message = str(exc)
                 if self._is_rate_limit_error(error_message):
                     fallback_events = self._recover_from_rate_limit(
+                        memory_question,
                         user_message,
                         route,
                         access_profile,
@@ -852,7 +966,7 @@ class HRAgent:
                 access_profile,
             )
             self.conversation_history[-1]["content"] = final_text
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
             return
 
@@ -866,11 +980,11 @@ class HRAgent:
             )
             if self.conversation_history and self.conversation_history[-1].get("role") == "assistant":
                 self.conversation_history[-1]["content"] = final_text
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
         else:
             fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
-            self.context_store.remember(access_profile.email, user_message, fallback)
+            self.context_store.remember(access_profile.email, memory_question, fallback)
             yield {"type": "error", "message": fallback}
 
     def _safe_parse_json(self, value: str):
@@ -914,6 +1028,7 @@ class HRAgent:
 
     def _recover_from_rate_limit(
         self,
+        memory_question: str,
         user_message: str,
         route: str,
         access_profile: AccessProfile,
@@ -953,7 +1068,7 @@ class HRAgent:
                 final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
                 self.conversation_history.append({"role": "assistant", "content": final_text})
                 self._trim_history()
-                memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+                memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
 
                 events = [
                     {
@@ -983,7 +1098,7 @@ class HRAgent:
             final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
             self.conversation_history.append({"role": "assistant", "content": final_text})
             self._trim_history()
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             return [{"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}]
 
         return []

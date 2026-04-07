@@ -54,6 +54,43 @@ FOLLOW_UP_SUMMARY_PATTERNS = (
     re.compile(r"^let me know\b", re.IGNORECASE),
     re.compile(r"^if you'd like\b", re.IGNORECASE),
 )
+THIN_FOLLOW_UP_QUESTIONS = {
+    "yes",
+    "yes please",
+    "yeah",
+    "yep",
+    "sure",
+    "sure thing",
+    "ok",
+    "okay",
+    "please",
+    "go ahead",
+    "do it",
+    "sounds good",
+    "no",
+    "no thanks",
+    "not now",
+    "show me",
+    "show that",
+    "show it",
+    "show those",
+    "break it down",
+    "drill down",
+    "go deeper",
+    "dig deeper",
+    "more detail",
+    "more details",
+    "visualize it",
+    "chart it",
+    "plot it",
+    "turn it into",
+    "that one",
+    "those ones",
+}
+THIN_FOLLOW_UP_PATTERNS = (
+    re.compile(r"^(?:answer|respond to|explain|show)\s+question\s+\d+$", re.IGNORECASE),
+    re.compile(r"^question\s+\d+$", re.IGNORECASE),
+)
 MEMORY_MATCH_STOPWORDS = {
     "business",
     "unit",
@@ -181,6 +218,21 @@ def _history_metrics(question: str, response: str = "", insight_summary: str = "
             return response_summary_metrics
 
     return _extract_metrics(str(response or ""))
+
+
+def _is_featureable_history_question(question: str) -> bool:
+    normalized = str(question or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in THIN_FOLLOW_UP_QUESTIONS:
+        return False
+    if any(pattern.match(normalized) for pattern in THIN_FOLLOW_UP_PATTERNS):
+        return False
+
+    tokens = _tokenize(normalized)
+    if not normalized.endswith("?") and len(tokens) <= 3:
+        return False
+    return True
 
 
 def _memory_match_details(query: str, question: str, response: str) -> dict[str, float | int | bool]:
@@ -436,7 +488,20 @@ class ContextStore:
                     "Headcount is the count of employees in scope. Attrition rate is attrited employees divided by total "
                     "employees in scope, multiplied by 100. Compensation metrics are based on MonthlyIncome and related pay fields."
                 ),
-                "tags": ["hr", "metrics", "calculations"],
+                "tags": ["hr", "metrics", "calculations", "policy"],
+            },
+            {
+                "title": "HR Snapshot Calculation Definitions",
+                "content": (
+                    "Promotion metrics in this demo use the current employee snapshot. "
+                    "'Promoted in the last year' is defined as YearsSinceLastPromotion < 1. "
+                    "A recently promoted count is COUNT(*) after applying that filter within the approved business units or slice. "
+                    "A promotion rate is recently promoted employees divided by total headcount in the same slice, multiplied by 100. "
+                    "For a department-level promotion table, the key columns are Department and YearsSinceLastPromotion, "
+                    "with COUNT(*) used for total headcount and for recently promoted employees, grouped by Department. "
+                    "These are snapshot metrics, not rolling time-series calculations."
+                ),
+                "tags": ["hr", "metrics", "calculations", "promotion", "policy"],
             },
             {
                 "title": "Supported HR Insights Questions",
@@ -808,8 +873,7 @@ class ContextStore:
 
         total_rows = len(rows)
         topic_scores: dict[str, float] = {}
-        favorite_questions: list[tuple[float, str, dict]] = []
-        seen_questions: set[str] = set()
+        favorite_questions: dict[str, dict] = {}
 
         for index, row in enumerate(rows):
             question = row["question"] or ""
@@ -831,22 +895,30 @@ class ContextStore:
                 topic_scores[metric] = topic_scores.get(metric, 0.0) + score
 
             normalized_question = question.strip().lower()
-            if normalized_question and normalized_question not in seen_questions:
-                seen_questions.add(normalized_question)
-                favorite_questions.append(
-                    (
-                        score + (0.15 * len(inferred_metrics)),
-                        row["created_at"],
-                        {
+            if normalized_question and _is_featureable_history_question(question):
+                question_score = score + (0.15 * len(inferred_metrics))
+                existing = favorite_questions.get(normalized_question)
+                if existing is None:
+                    favorite_questions[normalized_question] = {
+                        "score": question_score,
+                        "reuse_count": 1,
+                        "created_at": row["created_at"],
+                        "item": {
                             "memory_id": row["id"],
                             "question": question,
                             "created_at": row["created_at"],
                             "feedback_score": feedback_score,
                             "topics": _topic_labels(inferred_metrics),
                             "insight_summary": insight_summary,
+                            "reuse_count": 1,
                         },
-                    )
-                )
+                    }
+                else:
+                    existing["score"] += question_score
+                    existing["reuse_count"] += 1
+                    existing["item"]["reuse_count"] = existing["reuse_count"]
+                    if feedback_score > int(existing["item"].get("feedback_score", 0)):
+                        existing["item"]["feedback_score"] = feedback_score
 
         ranked_topics = sorted(topic_scores.items(), key=lambda item: item[1], reverse=True)
         favorite_topics = [
@@ -859,8 +931,14 @@ class ContextStore:
             if metric in KPI_METRICS
         ][:4]
 
-        favorite_questions.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        ranked_questions = [item[2] for item in favorite_questions[:5]]
+        ranked_questions = [
+            entry["item"]
+            for entry in sorted(
+                favorite_questions.values(),
+                key=lambda entry: (entry["score"], entry["reuse_count"], entry["created_at"]),
+                reverse=True,
+            )[:5]
+        ]
 
         if not favorite_topics:
             allowed = _allowed_metrics_filter(allowed_metrics)

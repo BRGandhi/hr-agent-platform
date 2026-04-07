@@ -186,6 +186,11 @@ Current retrieval patterns built on top of this table:
 - `past_questions_for_sidebar`: broader cross-session history list
 - `get_memory`: direct recall lookup for a saved prior chat
 
+Current storage and personalization semantics:
+- if a live turn is only a thin follow-up such as `yes`, `show me`, or `answer question 1`, the saved `question` may be promoted to the anchored substantive HR question instead
+- favorite-chat ranking aggregates reuse count across repeated asks of the same question
+- featured-history and center-board prompt surfaces intentionally filter thin shorthand follow-ups so the UI emphasizes the real business question
+
 ### 4.2 Table: `context_documents`
 
 | Column | Type | Description |
@@ -210,6 +215,7 @@ The repo seeds documents such as:
 - HR Analytics Scope Policy
 - HR Data Access Policy
 - Metric Definitions
+- HR Snapshot Calculation Definitions
 - Database Schema Summary
 
 ## 5. Derived Metrics Used By The Platform
@@ -219,12 +225,19 @@ The app currently surfaces or calculates:
 - `attrited_employees`
 - `active_employees`
 - `attrition_rate_pct`
+- `promoted_last_year_employees`
+- department-level `promotion_rate`
 
 Definitions:
 - `total_employees`: total employees in scope
 - `attrited_employees`: employees with `Attrition='Yes'` in scope
 - `active_employees`: total employees minus attrited employees in scope
 - `attrition_rate_pct`: attrited employees divided by total employees times 100
+- `promoted_last_year_employees`: employees where `YearsSinceLastPromotion < 1`
+- `promotion_rate`: recently promoted employees divided by total headcount in the same slice, multiplied by 100
+
+Snapshot calculation caveat:
+- promotion metrics in this demo are current-snapshot calculations, not rolling time-series measures
 
 ## 6. Access-Controlled Data Domains
 

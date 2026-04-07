@@ -110,11 +110,14 @@ Supported examples:
 - `show me`
 - `break it down`
 - `job level`
+- `answer question 1`
+- `show me how you calculated this metric`
 
 Required behavior:
 - if the active session contains a recent substantive HR turn, the short reply inherits that context
 - if the live session anchor is missing or thin, the agent can fall back to the user's recent stored memory
 - access validation must run on the resolved HR intent, not on the raw one-word reply in isolation
+- calculation-definition follow-ups should continue from the prior HR result instead of being treated as fresh report requests or out-of-scope prompts
 
 ## 5. Tooling And Agentic Retrieval Specification
 
@@ -145,6 +148,7 @@ Required behavior:
 - `Yes` and `No` feedback is stored against saved responses
 - positively rated or repeatedly reused answers can influence future recommendations
 - helpful prior answers should only surface when the current question is genuinely close, not just loosely related
+- favorite-chat ranking should reward both reuse frequency and positive feedback
 
 ## 6. Context And Memory Layer Specification
 
@@ -168,6 +172,9 @@ Each memory record should include:
 - timestamps
 - feedback score
 - topic labels where available
+
+Normalization rule:
+- if the live user message is only a thin follow-up such as `yes`, `show me`, or `answer question 1`, the saved memory question may be promoted to the underlying substantive HR question
 
 ### 6.3 Strict relevance
 
@@ -197,6 +204,9 @@ Definitions:
 - `Favorite Chats`: the user's strongest prior work based on reuse and feedback
 - `Relevant Chats`: strict role-aware and topic-aware matches
 - `Past Chats`: the broader cross-session question history for the signed-in user
+
+Quality rule:
+- thin shorthand follow-ups must not displace the substantive business question in favorite-chat or center-board personalization
 
 ## 7. Data And Access Specification
 
@@ -264,6 +274,7 @@ Required behavior:
 - CTA text is smaller and secondary
 - generic giant `Ask` or `Explore` treatments should not dominate the card
 - the prompts should reflect current access and prior interests
+- the featured prompt should prefer the substantive anchored HR question rather than a thin follow-up such as `yes` or `answer question 1`
 
 ## 9. Sidebar UI Specification
 
@@ -284,6 +295,7 @@ Required copy and interaction behavior:
 - clicking a topic filters favorite chats to that theme
 - saved chat buttons should use the question as the button label
 - weakly related past questions should not appear under `Relevant Chats`
+- metric-definition and methodology questions are valid in-scope follow-ups when they refer to the prior HR result
 
 ## 10. Top Bar Specification
 
@@ -330,6 +342,7 @@ Important backend and API behaviors in today's release wave:
 - `POST /api/memories/{memory_id}/recall` returns saved insight summaries without rerunning the original query
 - memory retention defaults to keep history indefinitely
 - history lookup and relevance scoring are stricter and more intentional
+- calculation-definition requests now use the same governed HR path as other in-scope follow-ups
 
 ## 13. Current Acceptance Criteria
 
@@ -338,6 +351,7 @@ The product should be considered consistent with today's spec when all of the fo
 - the center board shows headcount first and uses HR-leader KPI labels
 - saved chats recall cached insights instead of rerunning SQL
 - `yes` and similar short replies continue the active or recalled HR thread
+- `show me how you calculated this metric` explains the metric definition, columns used, formula, and snapshot caveats when prior context exists
 - `Relevant Chats` is intentionally sparse unless a close historical match exists
 - `Past Chats` reflects broader cross-session history
 - `Favorite Topics` is open by default and other sidebar history sections start collapsed

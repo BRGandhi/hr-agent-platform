@@ -2,6 +2,29 @@
 
 This file records the major architectural changes and implementation milestones in the repository. It is intended to help future maintainers understand not only what changed, but why it changed.
 
+## v1.10 - Anchored Follow-Ups, Reuse-Weighted Favorites, And Calculation Explanations
+
+Summary:
+- tightened personalization so favorite and featured questions reflect the substantive HR ask rather than thin shorthand follow-ups
+- upgraded favorite-chat scoring to reward both repeated reuse and positive feedback
+- added a governed explanation path for calculation-definition questions such as how a metric was derived, which columns were used, and what snapshot caveats apply
+
+Key agent and memory changes:
+- the orchestrator now recognizes metric-explanation requests as in-scope HR follow-ups instead of routing them into the generic guardrail
+- shorthand turns such as `answer question 1` now save under the anchored prior HR question when they are effectively just follow-up selectors
+- favorite-question ranking now aggregates reuse count across duplicate asks rather than keeping only a single latest row
+- featured-history surfaces now filter thin shorthand follow-ups so the center board and favorite chats stay readable
+
+Key UX and documentation changes:
+- center-board prompt cards now favor substantive recent history over placeholder follow-up fragments
+- feedback actions immediately refresh personalized history so favorite and relevant chat sections update in the same session
+- README, architecture, data-dictionary, and product-spec docs now describe the new methodology-explanation and anchored-history behavior
+
+Why this mattered:
+- demo users expect to ask `how did you calculate that?` and receive a governed explanation, not a report-builder prompt or a scope refusal
+- favorite surfaces lose credibility quickly when they feature `yes` or `answer question 1` instead of the real business question
+- reuse and feedback are stronger signals of value than simple recency for personalized navigation
+
 ## v1.9 - Agentic Context Retrieval, Cached Recall, And Personalized Navigation
 
 Summary:

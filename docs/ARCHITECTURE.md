@@ -178,6 +178,8 @@ Recent additions:
 - primes the active session with recalled saved chats so recalled work behaves like live chat context
 - uses stronger memory matching so relevant/history suggestions only surface for close semantic matches
 - stores compact recall summaries alongside full answers for later sidebar recall and UX personalization
+- routes metric-definition and calculation-explanation questions through the governed HR path instead of treating them as out-of-scope chatter
+- promotes the anchored substantive HR question into saved memory when the live user turn is only a shorthand follow-up
 
 The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](../config.py) to limit runaway tool loops.
 
@@ -218,6 +220,8 @@ This means even if the LLM proposes a broader query, the execution layer still n
 - stores per-response feedback so helpful answers can be reused as examples
 - powers the sidebar history list
 - powers saved-chat recall without rerunning the original query
+- keeps favorite-chat ranking sensitive to reuse count and positive feedback
+- filters thin shorthand follow-ups out of featured-history ranking so the UI keeps showing the real HR question
 
 The context store now supports multiple retrieval modes:
 - `recent_memory`: compact prompt context for the current turn
@@ -230,11 +234,13 @@ Important retrieval behavior:
 - memory search uses topic overlap, query coverage, and wording similarity rather than simple recency alone
 - relevant-history suggestions require a strong match so the UI does not surface noisy prior chats
 - past chats are retained indefinitely by default unless retention is explicitly enabled through configuration
+- metric-explanation follow-ups inherit the latest meaningful HR anchor so methodology questions stay attached to the original result
 
 ### 8.2 Context document retrieval
 - stores HR policies, schema notes, and metric definitions
 - retrieves documents by token overlap and allowed tags
 - injects matched content into the system prompt
+- includes seeded snapshot-calculation guidance for promotion metrics such as `YearsSinceLastPromotion < 1`
 
 The prompt builder in [agent/prompts.py](agent/prompts.py) merges:
 - access profile
