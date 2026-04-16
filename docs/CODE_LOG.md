@@ -2,6 +2,43 @@
 
 This file records the major architectural changes and implementation milestones in the repository. It is intended to help future maintainers understand not only what changed, but why it changed.
 
+## v1.11 - Trend Intelligence, Workspace Personalization, And Governed Artifact Export
+
+Summary:
+- expanded the product from a strong governed HR assistant into a more complete HR insights workspace with proactive tiles, configurable KPIs, and a dismissible in-chat insight strip
+- introduced a governed 36-month simulated workforce history layer and integrated MoM, YoY, rolling-12, and tenure-mix signals across stats, reports, memory, exports, and visual flows
+- added configurable Excel export plus insight-oriented PDF and PowerPoint artifact generation
+- upgraded trend routing so simple trend asks go chart-first and narrower requests such as `3 year promo trend for only lab tech` resolve accurately
+
+Key data and reporting changes:
+- added `database/workforce_history.py` and `utils/build_workforce_history.py` to generate and refresh the simulated historical layer
+- added new runtime tables and views including `employees_monthly_history`, `employees_trend_current`, `workforce_monthly_events`, `workforce_monthly_summary`, and `workforce_trend_latest_summary`
+- updated `/api/stats` and `database/connector.py` so trend summary and trend series are part of the main scoped KPI contract
+- extended standard reporting to support period-based trend report types and preserve `period_months` into downstream exports
+
+Key export and visualization changes:
+- added `utils/report_artifacts.py` to centralize configurable Excel, one-page PDF, and PowerPoint artifact generation
+- introduced `/api/reports/export/excel-config`, `/api/reports/export/pdf`, and `/api/reports/export/ppt`
+- tightened export workflow policy so generic report tables favor Excel, one-page PDFs remain insight-only, and PowerPoint stays on chart or selected-visual surfaces
+- expanded visualization recommendation beyond bar and pie charts to support more presentation-ready forms such as lollipop, treemap, bubble, and indicator views
+
+Key orchestration and memory changes:
+- added direct trend-intent parsing so MoM and YoY asks no longer fall into generic report-builder clarification
+- improved shorthand parsing for `promo`, `promote`, `3 year`, `36 month`, and role aliases like `lab tech`
+- added filtered trend-series construction from the employee-level monthly history for narrower role-specific trend asks
+- extended memory-topic derivation so trend-heavy asks contribute to a `Workforce trends` topic family used by personalization and recall surfaces
+
+Key UX and documentation changes:
+- proactive insight tiles now appear on the home screen and near the active chat experience
+- users can customize, pin, hide, and dismiss workspace surfaces without losing governed behavior
+- center-panel copy and tile controls were simplified for HR partners, including the shift from `Pin` text to a thumbtack icon
+- the implementation guide, runbook, architecture, data dictionary, product spec, speaker notes, and dedicated release notes were updated to document the expanded platform contract
+
+Why this mattered:
+- trend intelligence only becomes credible when the data layer, memory layer, charts, reports, and exports all use the same definitions
+- HR users needed chart-first and insight-first workflows, not a report-builder prompt for every trend request
+- once the platform added artifacts, visualization richness, and proactive workspace surfaces, the repo needed more detailed operational and architectural documentation to stay maintainable
+
 ## v1.10 - Anchored Follow-Ups, Reuse-Weighted Favorites, And Calculation Explanations
 
 Summary:

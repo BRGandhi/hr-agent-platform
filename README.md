@@ -9,6 +9,22 @@ This repo currently combines:
 - a context and memory layer for prior questions, HR policies, and schema notes
 - deterministic guardrails that reject non-HR and out-of-scope requests
 
+## Latest Release
+
+The current release wave extends the product well beyond the earlier April 3 workspace refresh.
+
+Major additions since the last GitHub baseline commit `903d8ae`:
+- proactive insight tiles on the home screen and active chat surface
+- customizable and pinnable workspace tiles with a broader KPI catalog
+- a dismissible `While You Chat` insight strip
+- a governed 36-month simulated workforce trend layer with MoM, YoY, rolling-12, and tenure-mix metrics
+- period-based trend reports wired into stats, reports, exports, and memory
+- a configurable Excel builder plus insight-oriented PDF and PowerPoint artifacts
+- stronger chart recommendations, including consultant-style visual forms beyond basic bar and pie views
+- more accurate direct trend routing for asks such as `mom attrition trend` or `3 year promo trend for lab tech`
+
+The detailed release narrative lives in [docs/RELEASE_NOTES_2026-04-16.md](docs/RELEASE_NOTES_2026-04-16.md).
+
 ## Why This Project Exists
 
 This codebase is aimed at a common internal-bank problem: teams want self-service HR analytics without exposing unrestricted raw people data or allowing a general-purpose chatbot to answer anything it wants. The platform constrains the AI experience to:
@@ -48,45 +64,58 @@ In other words, this is not a generic chat app. It is a governed HR analytics co
 - The agent can generate an attrition report for the signed-in user's business units.
 - The current demo dataset does not include real employee names, so employee-level reports use `EmployeeNumber`-derived labels.
 
-### 5. LLM-agnostic orchestration
+### 5. Simulated monthly trend layer
+- The platform now includes a governed 36-month simulated history derived from the base IBM snapshot.
+- Trend questions can use month-over-month and year-over-year headcount, hiring, attrition, promotion, overtime-share, and tenure-mix views.
+- The historical layer is explicitly labeled as simulated so teams do not mistake it for a raw HRIS event feed.
+- The main stats payload now carries a scoped trend summary plus trend series, so the home screen, exports, and reports all read from the same MoM/YoY contract.
+- Standard reports now support period-based trend report types such as workforce, headcount, attrition, promotion, and tenure-distribution trends.
+- Memory and recall flows now tag trend-heavy asks into a `Workforce trends` topic family so prior trend work can influence personalization and reuse.
+
+### 6. LLM-agnostic orchestration
 - Anthropic native tool use is supported.
 - OpenAI-compatible chat-completions tool use is supported.
 - Local models can be used through Ollama or any OpenAI-compatible gateway.
 - Hosted providers such as Kimi-compatible endpoints can be connected without changing the agent loop.
 
-### 6. Stronger visualization workflow
+### 7. Stronger visualization workflow
 - The agent can render polished Plotly visuals for approved HR data.
 - When a user asks to convert a generated table into a visual, the agent can now return multiple chart options and recommend the strongest view.
 - The web UI preserves the latest table context so follow-up prompts such as "turn that into a chart" work more reliably.
+- The recommendation layer now supports richer visual types such as `lollipop`, `treemap`, `bubble`, and `indicator` when they better match the business question.
+- Direct trend asks now prefer chart-first handling instead of falling into the generic report clarification flow.
 
-### 7. Bank-friendly operating model
+### 8. Bank-friendly operating model
 - The architecture separates model calls, access policy, SQL execution, and UI rendering into distinct layers.
 - The repo is suitable as a reference implementation for internal deployment behind enterprise identity and network controls.
 - The docs call out what is already in place and what still needs hardening for production in a regulated environment.
 
-### 8. Guided question discovery
+### 9. Guided question discovery
 - Topic chips on the home screen are clickable and now expand into sample questions for that metric or workflow.
 - Similar-question matches can show previously helpful answers before the agent generates a fresh response.
 - Assistant responses include `Yes` / `No` helpfulness controls so teams can curate strong examples over time.
 
-### 9. Personalized home screen and sidebar
+### 10. Personalized home screen and sidebar
 - The landing experience now leads with what the platform can do: generate reports, visualizations, and HR insights.
 - The center KPI board prioritizes headcount first, then surfaces KPI families the user has actually asked about before.
 - Prompt cards are phrased as concrete questions so the primary CTA is obvious instead of generic `Ask` / `Explore` labels.
 - The sidebar is organized around `Favorite Chats`, `Relevant Chats`, and `Past Chats`, with collapsible sections for faster navigation.
 - Relevant chat suggestions are informed by role, scope, and prior HR question patterns rather than just raw recency.
+- The workspace tile catalog now includes both proactive insight tiles and configurable KPI tiles that can be pinned or hidden per user.
+- The in-chat insight strip can now be dismissed and restored, reducing distraction during focused analysis.
 
-### 10. Better in-chat continuity
+### 11. Better in-chat continuity
 - Short follow-up replies such as `yes`, `job level`, `show me`, or `break it down` now inherit the current session context instead of being treated as brand-new standalone prompts.
 - Calculation-explanation follow-ups such as `show me how you calculated this metric` now inherit the prior HR result instead of falling into the generic guardrail path.
 - The agent carries the latest table context forward so follow-up charting and breakdown requests stay grounded in the last result.
 - Conversation history is still bounded by `MAX_CONVERSATION_HISTORY`, but within that window the platform is much better at staying on the same HR thread.
 
-### 11. More polished response UX
+### 12. More polished response UX
 - Assistant answers render in a more mature chat surface with improved typography, spacing, section hierarchy, and cleaner Markdown treatment.
 - Plain-text `Label: Value` output can now be upgraded into compact metric-summary blocks for easier scanning.
 - Code blocks include headers and copy buttons, and assistant responses include a top-level copy action.
 - Tables, quotes, charts, and tool output cards are styled to feel like one consistent product surface rather than separate widgets.
+- Insight surfaces can now generate a one-page PDF brief, while chart surfaces can generate a PowerPoint deck and governed Excel outputs.
 
 ## New Agent Features
 
@@ -98,6 +127,8 @@ The newest generation of the agent is optimized around governed follow-up work i
 - Table-aware visualization flow: when a user asks to turn a generated table into a chart, the latest table context is preserved and reused automatically.
 - Visualization gating: `Visual options` is now reserved for smaller aggregate tables that are actually chartable.
 - Report export flow: standard employee-level reports now favor `Download Excel` instead of a chart CTA.
+- Period-aware trend export flow: standard trend reports preserve their reporting window into quick Excel and configured Excel exports.
+- Insight artifact flow: one-page PDF briefs are reserved for insight surfaces, and PowerPoint export is reserved for chart and selected-visual surfaces rather than generic report tables.
 - Inline feedback loop: each assistant answer supports `Yes` / `No` helpfulness feedback for future curation.
 - Personalized navigation: the sidebar now separates favorite, relevant, and past chats so users can return to strong prior work faster.
 - Session-aware follow-ups: short replies now inherit the active HR question context before access validation runs.
@@ -105,6 +136,7 @@ The newest generation of the agent is optimized around governed follow-up work i
 - Cached recall flow: sidebar chat recalls now return saved insight summaries and seed the active session context without forcing a fresh database query.
 - Methodology explanations: users can ask how a metric was calculated, which columns were used, or what the formula means, and the agent treats that as an in-scope HR explanation request.
 - Response quality upgrades: the browser renderer promotes section headings, preserves rich Markdown better, and presents metric summaries more cleanly.
+- Trend-intent parsing: direct asks now understand shorthand like `promo`, time windows like `3 year`, and entity aliases like `lab tech`, reducing inaccurate fallback outputs.
 
 ## Architecture At A Glance
 
@@ -246,11 +278,18 @@ You can provide API keys either in `.env` or directly in the Connect LLM modal. 
 ### 5. Prepare the dataset
 
 The repo now includes a bundled `hr_data.db` so Docker-style deployments such as Render can boot without a separate database setup step.
+The bundled DB can also hold the simulated monthly trend tables used for MoM and YoY analysis.
 
 You only need the IBM HR dataset CSV if you want to rebuild the demo database locally:
 
 ```bash
 python setup_db.py
+```
+
+If you only want to refresh the simulated history on top of the existing database:
+
+```bash
+python utils/build_workforce_history.py
 ```
 
 ### 6. Start the web server
@@ -284,6 +323,7 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 ### Runtime entry points
 - [server.py](server.py): FastAPI app and SSE backend
 - [setup_db.py](setup_db.py): optional CSV-to-SQLite rebuild helper
+- [utils/build_workforce_history.py](utils/build_workforce_history.py): refresh helper for the simulated monthly trend layer
 
 ### Agent layer
 - [agent/llm_client.py](agent/llm_client.py): provider adapters
@@ -297,11 +337,15 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 - [database/access_control.py](database/access_control.py): role and scope resolution
 - [database/context_store.py](database/context_store.py): memory, insight summaries, recall metadata, and context docs
 - [database/schema.py](database/schema.py): schema prompt reference
+- [database/workforce_history.py](database/workforce_history.py): simulated monthly workforce history generator
 
 ### Frontend
 - [static/index.html](static/index.html): web UI shell
 - [static/app.js](static/app.js): client behavior and SSE rendering
 - [static/style.css](static/style.css): visual system
+
+### Export and artifact layer
+- [utils/report_artifacts.py](utils/report_artifacts.py): configurable Excel, one-page PDF, and PowerPoint artifact builders
 
 ## Documentation Guide
 
@@ -310,10 +354,12 @@ For a much more detailed onboarding guide, see [docs/IMPLEMENTATION_GUIDE.md](do
 - [docs/RUNBOOK.md](docs/RUNBOOK.md): day-2 operations, health checks, and incident handling
 - [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): logical data model and store definitions
 - [docs/CODE_LOG.md](docs/CODE_LOG.md): implementation history and major design decisions
+- [docs/RELEASE_NOTES_2026-04-16.md](docs/RELEASE_NOTES_2026-04-16.md): detailed release documentation for the full trend, export, and workspace expansion wave
 
 ## Change Logging
 
 Repository change history is tracked in [docs/CODE_LOG.md](docs/CODE_LOG.md).
+Release-sized implementation detail for the latest wave is also captured in [docs/RELEASE_NOTES_2026-04-16.md](docs/RELEASE_NOTES_2026-04-16.md).
 
 Recommended practice for future updates:
 - add one top-level version entry per feature cluster or release-sized change

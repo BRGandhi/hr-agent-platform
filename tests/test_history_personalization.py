@@ -346,6 +346,27 @@ class ContextStorePersonalizationTests(unittest.TestCase):
         self.assertNotIn("Can you break headcount down by department", memory["insight_summary"])
         self.assertNotIn("Which employee job roles have the highest headcount", memory["insight_summary"])
 
+    def test_trend_requests_are_tagged_as_workforce_trends(self):
+        self.store.remember(
+            self.user_email,
+            "Show month over month headcount trend for Business Units over the last 12 months",
+            "The simulated active workforce trend is up 3.8% year over year and down 0.2% month over month.",
+        )
+
+        results = self.store.past_questions_for_sidebar(
+            self.user_email,
+            limit=10,
+            allowed_metrics=["headcount", "attrition"],
+        )
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("Workforce trends", results[0]["topics"])
+        self.assertTrue(any(item["topic"] == "Workforce trends" for item in summary["favorite_topics"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ Build the HR SQLite database from the original IBM attrition CSV only.
 The runtime database contains:
 - `employees`: the original CSV rows
 - `employees_current`: a compatibility view over the same original rows
+- simulated 36-month trend tables derived from the base snapshot
 
 Usage:
     python setup_db.py
@@ -19,6 +20,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+from database.workforce_history import materialize_workforce_history
 
 CSV_NAME = "WA_Fn-UseC_-HR-Employee-Attrition.csv"
 
@@ -73,6 +76,17 @@ def setup_database(csv_path: str, db_path: str) -> None:
     print(f"  Original rows: {row_count}")
     for row in attrition:
         print(f"  Attrition={row[0]}: {row[1]} employees")
+    print("\nBuilding simulated monthly workforce history...")
+    metadata = materialize_workforce_history(db_path)
+    validation = metadata.get("validation", {})
+    print(
+        "  Simulated latest active headcount: "
+        f"{metadata.get('target_latest_headcount')} across {metadata.get('months')} months"
+    )
+    print(
+        "  Validation status: "
+        f"{'passed' if validation.get('passed') else 'needs review'}"
+    )
     print("\nSetup complete! You can now run: python -m uvicorn server:app --host 127.0.0.1 --port 8000")
 
 

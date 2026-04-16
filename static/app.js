@@ -9,17 +9,46 @@
  */
 
 const DEFAULT_SIDEBAR_SECTIONS = {
-  topics: false,
+  topics: true,
   favorites: true,
   relevant: true,
   past: true,
 };
+
+const DEFAULT_TILE_PREFERENCES = {
+  pinned: [],
+  hidden: [],
+};
+
+function loadChatInsightsDismissed() {
+  return localStorage.getItem("hr_chat_insights_dismissed") === "true";
+}
 
 function loadSidebarSections() {
   try {
     return { ...DEFAULT_SIDEBAR_SECTIONS, ...JSON.parse(localStorage.getItem("hr_sidebar_sections") || "{}") };
   } catch {
     return { ...DEFAULT_SIDEBAR_SECTIONS };
+  }
+}
+
+function normalizeTilePreferences(preferences = {}) {
+  const pinned = Array.isArray(preferences?.pinned) ? preferences.pinned : [];
+  const hidden = Array.isArray(preferences?.hidden) ? preferences.hidden : [];
+  return {
+    pinned: Array.from(new Set(pinned.map((value) => String(value || "").trim()).filter(Boolean))),
+    hidden: Array.from(new Set(hidden.map((value) => String(value || "").trim()).filter(Boolean))),
+  };
+}
+
+function loadTilePreferences() {
+  try {
+    return {
+      ...DEFAULT_TILE_PREFERENCES,
+      ...normalizeTilePreferences(JSON.parse(localStorage.getItem("hr_workspace_tile_preferences") || "{}")),
+    };
+  } catch {
+    return { ...DEFAULT_TILE_PREFERENCES };
   }
 }
 
@@ -45,6 +74,9 @@ const state = {
   activeTopbarPanel: "",
   historyRequestToken: 0,
   sidebarSections: loadSidebarSections(),
+  tilePreferences: loadTilePreferences(),
+  chatInsightsDismissed: loadChatInsightsDismissed(),
+  activeExcelExport: null,
   historySummary: {
     favoriteTopics: [],
     favoriteKpis: [],
@@ -120,6 +152,28 @@ const connectLlmBtn = $("connectLlmBtn");
 const userBadge = $("userBadge");
 const logoutBtn = $("logoutBtn");
 const llmModalNote = $("llmModalNote");
+const tileModal = $("tileModal");
+const tileModalBackdrop = $("tileModalBackdrop");
+const closeTileModalBtn = $("closeTileModal");
+const tileSettingsList = $("tileSettingsList");
+const resetTilesBtn = $("resetTilesBtn");
+const excelModal = $("excelModal");
+const excelModalBackdrop = $("excelModalBackdrop");
+const closeExcelModalBtn = $("closeExcelModal");
+const excelModalTitle = $("excelModalTitle");
+const excelColumnsList = $("excelColumnsList");
+const excelPeriodGroup = $("excelPeriodGroup");
+const excelPeriodMonths = $("excelPeriodMonths");
+const excelSortBy = $("excelSortBy");
+const excelSortDirection = $("excelSortDirection");
+const excelFilterColumn = $("excelFilterColumn");
+const excelFilterValue = $("excelFilterValue");
+const excelMaxRows = $("excelMaxRows");
+const excelIncludeSummary = $("excelIncludeSummary");
+const downloadExcelConfigBtn = $("downloadExcelConfigBtn");
+const chatInsightsDock = $("chatInsightsDock");
+const workspacePanelTitle = $("workspacePanelTitle");
+const workspacePanelSub = $("workspacePanelSub");
 const centerKpiBoard = $("centerKpiBoard");
 const metricExamplesEl = $("metricExamples");
 const topicSuggestionsEl = $("topicSuggestions");
@@ -173,6 +227,14 @@ function wireUiEvents() {
   connectLlmBtn.addEventListener("click", openLlmModal);
   closeLlmModalBtn.addEventListener("click", closeLlmModal);
   llmModalBackdrop.addEventListener("click", closeLlmModal);
+  closeTileModalBtn?.addEventListener("click", closeTileModal);
+  tileModalBackdrop?.addEventListener("click", closeTileModal);
+  resetTilesBtn?.addEventListener("click", resetTilePreferences);
+  tileSettingsList?.addEventListener("change", handleTileSettingsChange);
+  closeExcelModalBtn?.addEventListener("click", closeExcelModal);
+  excelModalBackdrop?.addEventListener("click", closeExcelModal);
+  excelFilterColumn?.addEventListener("change", syncExcelFilterValues);
+  downloadExcelConfigBtn?.addEventListener("click", downloadConfiguredExcelFromModal);
 
   document.addEventListener("click", (event) => {
     if (handleDynamicButtonClick(event)) {
@@ -188,8 +250,18 @@ function wireUiEvents() {
 
   // Escape closes LLM modal only — auth modal is non-dismissible
   document.addEventListener("keydown", (event) => {
+    const actionableCard = event.target instanceof HTMLElement
+      ? event.target.closest(".workspace-tile[data-q], .chat-insight-card[data-q]")
+      : null;
+    if (actionableCard && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      actionableCard.click();
+      return;
+    }
     if (event.key === "Escape") {
       closeLlmModal();
+      closeTileModal();
+      closeExcelModal();
     }
   });
 }
@@ -207,6 +279,14 @@ function renderSidebarSectionState() {
   });
 }
 
+function resetSidebarSections({ persist = true } = {}) {
+  state.sidebarSections = { ...DEFAULT_SIDEBAR_SECTIONS };
+  if (persist) {
+    localStorage.setItem("hr_sidebar_sections", JSON.stringify(state.sidebarSections));
+  }
+  renderSidebarSectionState();
+}
+
 function toggleSidebarSection(sectionId) {
   if (!sectionId) return;
   state.sidebarSections = {
@@ -222,6 +302,36 @@ function handleDynamicButtonClick(event) {
   const sectionToggle = event.target.closest("[data-section-toggle]");
   if (sectionToggle) {
     toggleSidebarSection(sectionToggle.dataset.sectionToggle || "");
+    return true;
+  }
+
+  const openTileModalButton = event.target.closest("[data-open-tile-modal]");
+  if (openTileModalButton) {
+    openTileModal();
+    return true;
+  }
+
+  const resetTilesButton = event.target.closest("[data-reset-tiles]");
+  if (resetTilesButton) {
+    resetTilePreferences();
+    return true;
+  }
+
+  const hideChatInsightsButton = event.target.closest("[data-hide-chat-insights]");
+  if (hideChatInsightsButton) {
+    setChatInsightsDismissed(true);
+    return true;
+  }
+
+  const showChatInsightsButton = event.target.closest("[data-show-chat-insights]");
+  if (showChatInsightsButton) {
+    setChatInsightsDismissed(false);
+    return true;
+  }
+
+  const pinButton = event.target.closest("[data-tile-pin]");
+  if (pinButton) {
+    toggleTilePin(pinButton.dataset.tilePin || "");
     return true;
   }
 
@@ -512,6 +622,7 @@ async function revealApp() {
     return;
   }
 
+  resetSidebarSections();
   authShell.classList.add("hidden");
   appLayout.classList.remove("hidden");
   await loadStats();
@@ -555,7 +666,56 @@ function buildDbCaption(stats) {
     ? stats.allowed_departments.join(", ")
     : "Enterprise";
   const metricsLabel = metrics.length ? metrics.join(", ") : "approved HR measures";
-  return `Business Units | ${departments} | ${metricsLabel}`;
+  const trendMonth = formatTrendMonth(stats.latest_trend_month, { month: "short", year: "numeric" });
+  return `Business Units | ${departments} | ${metricsLabel}${trendMonth ? ` | trend through ${trendMonth}` : ""}`;
+}
+
+function isTrendReportType(reportType) {
+  const normalized = String(reportType || "").trim().toLowerCase();
+  return normalized === "workforce_trend" || normalized.endsWith("_trend");
+}
+
+function getTrendSummaryFromStats(stats) {
+  return stats?.trend_summary || {};
+}
+
+function hasTrendData(stats) {
+  const summary = getTrendSummaryFromStats(stats);
+  return Boolean(
+    stats
+    && stats.latest_trend_month
+    && summary
+    && Object.keys(summary).length
+  );
+}
+
+function formatSignedCount(value) {
+  const numeric = Number(value || 0);
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  return `${sign}${Math.abs(numeric).toLocaleString()}`;
+}
+
+function formatSignedPercent(value, digits = 1) {
+  const numeric = Number(value || 0);
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  return `${sign}${Math.abs(numeric).toFixed(digits)}%`;
+}
+
+function trendPeriodLabel(months) {
+  const numeric = Number(months || 0);
+  if (!numeric) return "";
+  return `Last ${numeric} month${numeric === 1 ? "" : "s"}`;
+}
+
+function formatTrendMonth(value, options = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const date = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString(undefined, {
+    month: options.month || "short",
+    year: options.year || "numeric",
+  });
 }
 
 function buildKpiStrip(stats) {
@@ -564,6 +724,7 @@ function buildKpiStrip(stats) {
   const canSeeHeadcount = allowedMetrics.has("all") || allowedMetrics.has("headcount");
   const canSeeAttrition = allowedMetrics.has("all") || allowedMetrics.has("attrition");
   const departments = stats.allowed_departments || [];
+  const trendAvailable = hasTrendData(stats);
 
   cards.push(scopeSummaryCard(departments));
   cards.push(kpiCard("Business Unit Count", departments.length ? String(departments.length) : "Enterprise", ""));
@@ -571,11 +732,18 @@ function buildKpiStrip(stats) {
   if (canSeeHeadcount) {
     cards.push(kpiCard("Headcount", Number(stats.total_employees || 0).toLocaleString(), "accent"));
     cards.push(kpiCard("Active", Number(stats.active_employees || 0).toLocaleString(), "success"));
+    if (trendAvailable) {
+      cards.push(kpiCard("Active HC MoM", formatSignedPercent(stats.headcount_mom_change_pct || 0, 1), Number(stats.headcount_mom_change_pct || 0) < 0 ? "danger" : "success"));
+      cards.push(kpiCard("Active HC YoY", formatSignedPercent(stats.headcount_yoy_change_pct || 0, 1), Number(stats.headcount_yoy_change_pct || 0) < 0 ? "danger" : "success"));
+    }
   }
 
   if (canSeeAttrition) {
     cards.push(kpiCard("Attrited", Number(stats.attrited_employees || 0).toLocaleString(), "danger"));
     cards.push(kpiCard("Attrition Rate", `${stats.attrition_rate_pct || 0}%`, (stats.attrition_rate_pct || 0) > 15 ? "danger" : "accent"));
+    if (trendAvailable) {
+      cards.push(kpiCard("Rolling 12 Attrition", `${Number(stats.rolling12_attrition_rate_pct || 0).toFixed(1)}%`, Number(stats.rolling12_attrition_rate_pct || 0) > 15 ? "danger" : "accent"));
+    }
   }
 
   if (allowedMetrics.has("all")) {
@@ -610,11 +778,12 @@ function renderStarterPrompts() {
 
   prompts.push(`What is the total headcount for ${scopeName}?`);
   prompts.push(`Generate an active headcount report for ${scopeName}`);
+  prompts.push(`Show month over month headcount trend for ${scopeName} over the last 12 months`);
 
   if (hasAllMetrics || allowed.has("attrition")) {
     prompts.push(`What is the attrition rate for ${scopeName}?`);
     prompts.push(`Show attrition by department for ${scopeName}`);
-    prompts.push(`Generate an attrition report for ${scopeName}`);
+    prompts.push(`Generate an attrition trend report for ${scopeName} for the last 12 months`);
   }
   if (hasAllMetrics || allowed.has("policy")) {
     prompts.push("Which HR access policy applies to my role?");
@@ -658,22 +827,14 @@ function preferredTopicsFromHistory() {
 
   const normalizedAllowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
   if (normalizedAllowed.includes("all")) {
-    return ["Headcount", "Attrition rate", "Compensation bands", "Satisfaction pulse", "Tenure mix"];
+    return ["Headcount", "Workforce trends", "Attrition rate", "Compensation bands", "Tenure mix"];
   }
 
-  return Array.from(new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []).map((metric) => {
-    const mapping = {
-      "headcount": "Headcount",
-      "attrition": "Attrition rate",
-      "compensation": "Compensation bands",
-      "performance": "Performance ratings",
-      "satisfaction": "Satisfaction pulse",
-      "tenure": "Tenure mix",
-      "demographics": "Demographic mix",
-      "policy": "Access policy guidance",
-    };
-    return mapping[metric] || "";
-  }).filter(Boolean))).slice(0, 5);
+  return Array.from(new Set(
+    normalizeMetrics(state.accessProfile?.allowed_metrics || [])
+      .map((metric) => friendlyMetricTopic(metric))
+      .filter(Boolean),
+  )).slice(0, 5);
 }
 
 function preferredQuestionsFromHistory() {
@@ -754,6 +915,7 @@ function topicMetricKey(topic) {
     "headcount": "headcount",
     "active headcount": "headcount",
     "active workforce": "headcount",
+    "workforce trends": "trend",
     "department mix": "headcount",
     "attrition rate": "attrition",
     "attrited employee roster": "attrition",
@@ -854,7 +1016,7 @@ function renderDiveBackIn() {
 
   renderRelevantHistory(state.relevantHistoryItems, activeTopic);
   renderPastHistory(state.pastHistoryItems, activeTopic);
-  renderCenterKpiBoard();
+  renderWorkspaceSurfaces();
 }
 
 function hasHistoryKeyword(patterns) {
@@ -914,14 +1076,47 @@ function buildCenterKpiCards() {
   if (!state.stats || !state.accessProfile) return [];
 
   const scopeName = state.accessProfile.scope_name || "my business units";
+  const departments = state.accessProfile.allowed_departments || [];
   const hasAllMetrics = normalizeMetrics(state.accessProfile?.allowed_metrics || []).includes("all");
   const allowed = new Set(normalizeMetrics(state.accessProfile?.allowed_metrics || []));
   const requestedFamilies = requestedKpiFamilies();
   const families = [];
   const cards = [];
+  const extraCards = [];
+  const totalEmployees = Number(state.stats.total_employees || 0);
+  const activeEmployees = Number(state.stats.active_employees || 0);
+  const attritedEmployees = Number(state.stats.attrited_employees || 0);
+  const attritionRate = Number(state.stats.attrition_rate_pct || 0);
+  const retentionRate = totalEmployees > 0 ? Math.max(0, 100 - attritionRate) : 0;
+  const promotedLastYear = Number(state.stats.promoted_last_year_employees || 0);
+  const avgPromotionYears = Number(state.stats.avg_years_since_last_promotion || 0);
+  const avgSalaryHike = Number(state.stats.avg_salary_hike_pct || 0);
+  const promotionStalled = Number(state.stats.promotion_stalled_employees || 0);
+  const promotionRate = activeEmployees > 0 ? (promotedLastYear / activeEmployees) * 100 : 0;
+  const trendAvailable = hasTrendData(state.stats);
+  const latestTrendMonth = formatTrendMonth(state.stats.latest_trend_month, { month: "short", year: "numeric" });
+  const headcountMoMChange = Number(state.stats.headcount_mom_change || 0);
+  const headcountMoMChangePct = Number(state.stats.headcount_mom_change_pct || 0);
+  const headcountYoYChange = Number(state.stats.headcount_yoy_change || 0);
+  const headcountYoYChangePct = Number(state.stats.headcount_yoy_change_pct || 0);
+  const monthlyHiringRate = Number(state.stats.monthly_hiring_rate_pct || 0);
+  const monthlyAttritionRate = Number(state.stats.monthly_attrition_rate_pct || 0);
+  const monthlyPromotionRate = Number(state.stats.monthly_promotion_rate_pct || 0);
+  const rollingHiringRate = Number(state.stats.rolling12_hiring_rate_pct || 0);
+  const rollingAttritionRate = Number(state.stats.rolling12_attrition_rate_pct || 0);
+  const rollingPromotionRate = Number(state.stats.rolling12_promotion_rate_pct || 0);
+  const avgYearsAtCompany = Number(state.stats.avg_years_at_company || 0);
+  const overtimeShare = Number(state.stats.overtime_share_pct || 0);
+  const tenureDistribution = state.stats.tenure_distribution_pct || {};
+  const earlyTenureShare = Number(tenureDistribution["0_1"] || 0);
+  const midTenureShare = Number(tenureDistribution["2_4"] || 0);
+  const longTenureShare = Number(tenureDistribution["10_plus"] || 0);
 
   if (hasAllMetrics || allowed.has("headcount")) {
     families.push("headcount");
+  }
+  if ((hasAllMetrics || allowed.has("tenure")) && !families.includes("tenure")) {
+    families.push("tenure");
   }
   requestedFamilies.forEach((family) => {
     if (!families.includes(family)) {
@@ -931,66 +1126,278 @@ function buildCenterKpiCards() {
 
   if (families.includes("headcount")) {
     cards.push({
+      id: "kpi-total-headcount",
+      kind: "metric",
       family: "Headcount",
       familyKey: "headcount",
       label: "Total headcount",
-      value: Number(state.stats.total_employees || 0).toLocaleString(),
-      note: "Employees across your business units",
+      value: totalEmployees.toLocaleString(),
+      note: trendAvailable && latestTrendMonth
+        ? `Snapshot view | active trend ${formatSignedPercent(headcountYoYChangePct, 1)} YoY as of ${latestTrendMonth}`
+        : "Employees in your approved view",
       prompt: `What is the total headcount for ${scopeName}?`,
+      cta: "Open",
     });
   }
 
-  if (requestedFamilies.includes("headcount")) {
-    cards.push({
+  if (families.includes("headcount")) {
+    extraCards.push({
+      id: "kpi-active-headcount",
+      kind: "metric",
       family: "Headcount",
       familyKey: "headcount",
       label: "Active headcount",
-      value: Number(state.stats.active_employees || 0).toLocaleString(),
-      note: "Employees currently active",
+      value: activeEmployees.toLocaleString(),
+      note: trendAvailable && latestTrendMonth
+        ? `Simulated active trend through ${latestTrendMonth}`
+        : "Currently active employees",
       prompt: `What is the active headcount for ${scopeName}?`,
+      cta: "Open",
+    });
+
+    if (trendAvailable) {
+      extraCards.push({
+        id: "kpi-headcount-mom-trend",
+        kind: "metric",
+        family: "Headcount",
+        familyKey: "headcount",
+        label: "Active headcount MoM",
+        value: formatSignedPercent(headcountMoMChangePct, 1),
+        note: `${formatSignedCount(headcountMoMChange)} vs prior month${latestTrendMonth ? ` | ${latestTrendMonth}` : ""}`,
+        prompt: `Show month over month headcount trend for ${scopeName} over the last 12 months`,
+        tone: headcountMoMChangePct < 0 ? "danger" : "success",
+        cta: "Trend",
+      });
+
+      extraCards.push({
+        id: "kpi-headcount-yoy-trend",
+        kind: "metric",
+        family: "Headcount",
+        familyKey: "headcount",
+        label: "Active headcount YoY",
+        value: formatSignedPercent(headcountYoYChangePct, 1),
+        note: `${formatSignedCount(headcountYoYChange)} vs same month last year`,
+        prompt: `Show year over year workforce change for ${scopeName}`,
+        tone: headcountYoYChangePct < 0 ? "danger" : "success",
+        cta: "Compare",
+      });
+
+      extraCards.push({
+        id: "kpi-hiring-trend",
+        kind: "metric",
+        family: "Headcount",
+        familyKey: "headcount",
+        label: "Rolling 12 hiring",
+        value: `${rollingHiringRate.toFixed(1)}%`,
+        note: `${monthlyHiringRate.toFixed(1)}% in the latest month`,
+        prompt: `Generate a workforce trend report for ${scopeName} for the last 12 months`,
+        tone: "success",
+        cta: "Report",
+      });
+    }
+
+    extraCards.push({
+      id: "kpi-headcount-coverage",
+      kind: "metric",
+      family: "Headcount",
+      familyKey: "headcount",
+      label: "Coverage in scope",
+      value: departments.length ? departments.length.toLocaleString() : "Enterprise",
+      note: departments.length
+        ? `Business unit${departments.length > 1 ? "s" : ""} in your view`
+        : "Enterprise-wide access",
+      prompt: "Summarize the access rules for my role in this platform",
+      cta: "Scope",
     });
   }
 
   if (families.includes("attrition")) {
     cards.push({
+      id: "kpi-attrition-rate",
+      kind: "metric",
       family: "Attrition",
       familyKey: "attrition",
       label: "Attrition rate",
-      value: `${state.stats.attrition_rate_pct || 0}%`,
-      note: "Attrition across your business units",
+      value: `${attritionRate}%`,
+      note: trendAvailable
+        ? `Snapshot rate | rolling 12 trend ${rollingAttritionRate.toFixed(1)}%`
+        : "Current attrition in view",
       prompt: `What is the attrition rate for ${scopeName}?`,
-      tone: Number(state.stats.attrition_rate_pct || 0) > 15 ? "danger" : "",
+      tone: attritionRate > 15 ? "danger" : "",
+      cta: "Drivers",
     });
+
+    extraCards.push(
+      {
+        id: "kpi-attrited-employees",
+        kind: "metric",
+        family: "Attrition",
+        familyKey: "attrition",
+        label: "Attrited employees",
+        value: attritedEmployees.toLocaleString(),
+        note: "Employees marked attrited in the current snapshot",
+        prompt: `Generate an attrition report for ${scopeName}`,
+        tone: attritedEmployees > 0 ? "danger" : "",
+        cta: "Roster",
+      },
+      {
+        id: "kpi-retention-rate",
+        kind: "metric",
+        family: "Attrition",
+        familyKey: "attrition",
+        label: "Retention rate",
+        value: `${retentionRate.toFixed(1)}%`,
+        note: "Active workforce retained in the current view",
+        prompt: `Which teams in ${scopeName} have the highest attrition risk?`,
+        tone: retentionRate >= 90 ? "success" : "",
+        cta: "Risk",
+      },
+    );
+    if (trendAvailable) {
+      extraCards.push({
+        id: "kpi-rolling12-attrition",
+        kind: "metric",
+        family: "Attrition",
+        familyKey: "attrition",
+        label: "Rolling 12 attrition",
+        value: `${rollingAttritionRate.toFixed(1)}%`,
+        note: `${monthlyAttritionRate.toFixed(1)}% in the latest month${latestTrendMonth ? ` | ${latestTrendMonth}` : ""}`,
+        prompt: `Generate an attrition trend report for ${scopeName} for the last 12 months`,
+        tone: rollingAttritionRate > 15 ? "danger" : "",
+        cta: "Trend",
+      });
+    }
   }
 
   const hasPromotionStats = [
     state.stats.promoted_last_year_employees,
     state.stats.avg_years_since_last_promotion,
+    state.stats.avg_salary_hike_pct,
+    state.stats.promotion_stalled_employees,
   ].some((value) => value !== undefined && value !== null);
 
   if (families.includes("promotion") && hasPromotionStats) {
     cards.push(
       {
+        id: "kpi-promoted-last-year",
+        kind: "metric",
         family: "Promotion",
         familyKey: "promotion",
         label: "Promoted in last year",
-        value: Number(state.stats.promoted_last_year_employees || 0).toLocaleString(),
-        note: "Employees promoted within the past year",
+        value: promotedLastYear.toLocaleString(),
+        note: trendAvailable
+          ? `Rolling 12 promotion trend ${rollingPromotionRate.toFixed(1)}%`
+          : "Promoted in the last 12 months",
         prompt: `How many employees in ${scopeName} were promoted in the last year?`,
         tone: "success",
+        cta: "Movement",
+      },
+    );
+    extraCards.push(
+      {
+        id: "kpi-promotion-rate",
+        kind: "metric",
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "Promotion rate",
+        value: `${promotionRate.toFixed(1)}%`,
+        note: "Share of active employees promoted last year",
+        prompt: `Show employees with recent promotions in ${scopeName}`,
+        tone: promotionRate >= 8 ? "success" : "",
+        cta: "Trend",
       },
       {
+        id: "kpi-average-promotion-time",
+        kind: "metric",
         family: "Promotion",
         familyKey: "promotion",
         label: "Avg time to promotion",
-        value: `${Number(state.stats.avg_years_since_last_promotion || 0).toFixed(1)} yrs`,
-        note: "Estimated from current employee promotion records",
+        value: `${avgPromotionYears.toFixed(1)} yrs`,
+        note: "Based on current promotion records",
         prompt: `What is the average time to promotion in ${scopeName}?`,
+        cta: "Breakdown",
+      },
+      {
+        id: "kpi-average-salary-hike",
+        kind: "metric",
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "Avg salary hike",
+        value: `${avgSalaryHike.toFixed(1)}%`,
+        note: "Average hike in the current approved view",
+        prompt: `Compare salary hikes and years since promotion for ${scopeName}`,
+        cta: "Compare",
+      },
+      {
+        id: "kpi-promotion-stalled",
+        kind: "metric",
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "5+ years since promotion",
+        value: promotionStalled.toLocaleString(),
+        note: "Employees who may need a promotion review",
+        prompt: `Which departments in ${scopeName} have the longest time since promotion?`,
+        tone: promotionStalled > 0 ? "danger" : "",
+        cta: "Pressure points",
+      },
+    );
+    if (trendAvailable) {
+      extraCards.push({
+        id: "kpi-rolling12-promotion",
+        kind: "metric",
+        family: "Promotion",
+        familyKey: "promotion",
+        label: "Rolling 12 promotion",
+        value: `${rollingPromotionRate.toFixed(1)}%`,
+        note: `${monthlyPromotionRate.toFixed(1)}% in the latest month${latestTrendMonth ? ` | ${latestTrendMonth}` : ""}`,
+        prompt: `Generate a promotion trend report for ${scopeName} for the last 12 months`,
+        tone: rollingPromotionRate >= 30 ? "success" : "",
+        cta: "Trend",
+      });
+    }
+  }
+
+  if (families.includes("tenure") && trendAvailable) {
+    extraCards.push(
+      {
+        id: "kpi-average-tenure-trend",
+        kind: "metric",
+        family: "Tenure",
+        familyKey: "tenure",
+        label: "Average tenure",
+        value: `${avgYearsAtCompany.toFixed(1)} yrs`,
+        note: latestTrendMonth
+          ? `Simulated tenure mix through ${latestTrendMonth}`
+          : "Average years at company",
+        prompt: `Generate a tenure distribution trend report for ${scopeName} for the last 12 months`,
+        cta: "Trend",
+      },
+      {
+        id: "kpi-early-tenure-share",
+        kind: "metric",
+        family: "Tenure",
+        familyKey: "tenure",
+        label: "0-1 year tenure share",
+        value: `${earlyTenureShare.toFixed(1)}%`,
+        note: `${midTenureShare.toFixed(1)}% in the 2-4 year band`,
+        prompt: `Show tenure mix trend for ${scopeName} over the last 12 months`,
+        cta: "Mix",
+      },
+      {
+        id: "kpi-long-tenure-share",
+        kind: "metric",
+        family: "Tenure",
+        familyKey: "tenure",
+        label: "10+ year tenure share",
+        value: `${longTenureShare.toFixed(1)}%`,
+        note: `${overtimeShare.toFixed(1)}% overtime share in the latest month`,
+        prompt: `How has the long-tenure share changed in ${scopeName} over the last 12 months?`,
+        cta: "Compare",
       },
     );
   }
 
-  return cards.slice(0, 6);
+  return [...cards, ...extraCards];
 }
 
 function centerPromptNote(topic, reuseCount = 1, feedbackScore = 0) {
@@ -1004,6 +1411,7 @@ function centerPromptNote(topic, reuseCount = 1, feedbackScore = 0) {
   const topicKey = topicMetricKey(topic);
   const notes = {
     "headcount": "A workforce question shaped by your recent history.",
+    "trend": "Continue a recent month-over-month or year-over-year thread.",
     "attrition": "Continue exploring recent attrition themes.",
     "tenure": "Extend a recent tenure or promotion thread.",
     "compensation": "Follow up on recent compensation questions.",
@@ -1013,6 +1421,176 @@ function centerPromptNote(topic, reuseCount = 1, feedbackScore = 0) {
     "policy": "Review role-based access and guidance.",
   };
   return notes[topicKey] || "A recommended question based on your recent HR activity.";
+}
+
+function allowedMetricTopicsForRole(limit = 3) {
+  const normalizedAllowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
+  if (normalizedAllowed.includes("all")) {
+    return preferredTopicsFromHistory().slice(0, limit);
+  }
+  return Array.from(new Set(normalizedAllowed.map((metric) => friendlyMetricTopic(metric)).filter(Boolean))).slice(0, limit);
+}
+
+function preferredWorkspacePrompt() {
+  const personalized = buildPersonalizedKpiPrompts().find((item) => item.prompt);
+  if (personalized?.prompt) return personalized.prompt;
+  if (state.starterPrompts[0]) return state.starterPrompts[0];
+  const scopeName = state.accessProfile?.scope_name || "my business units";
+  return `What is the total headcount for ${scopeName}?`;
+}
+
+function buildRoleInsightCard() {
+  if (!state.accessProfile) return null;
+
+  const role = state.accessProfile.role || "Authorized user";
+  const scopeName = state.accessProfile.scope_name || "your approved coverage";
+  const departments = state.accessProfile.allowed_departments || [];
+  const topics = allowedMetricTopicsForRole(3);
+  const topicCopy = topics.length ? topics.join(", ").toLowerCase() : "approved workforce measures";
+
+  return {
+    id: "insight-role-focus",
+    kind: "insight",
+    family: "Role insight",
+    familyKey: "role",
+    label: `${role} priorities`,
+    question: `Focus areas: ${topicCopy}.`,
+    note: departments.length
+      ? `${departments.length} business unit${departments.length > 1 ? "s" : ""} in view`
+      : "Enterprise-wide view",
+    cta: "Role fit",
+    prompt: (normalizeMetrics(state.accessProfile.allowed_metrics).includes("policy"))
+      ? "Which HR measures are approved for my role?"
+      : preferredWorkspacePrompt(),
+  };
+}
+
+function buildHistoryInsightCard() {
+  const favoriteQuestion = preferredQuestionItemsFromHistory()[0];
+  if (!favoriteQuestion) return null;
+
+  const primaryTopic = Array.isArray(favoriteQuestion.topics) && favoriteQuestion.topics.length
+    ? favoriteQuestion.topics[0]
+    : "recent HR work";
+  const reuseCount = Number(favoriteQuestion.reuse_count || 1);
+  const feedbackScore = Number(favoriteQuestion.feedback_score || 0);
+  let note = "A strong match to the HR themes you have revisited most recently.";
+  if (feedbackScore > 0) {
+    note = "Marked helpful in a prior chat.";
+  } else if (reuseCount > 1) {
+    note = `Asked ${reuseCount} times across prior chats.`;
+  }
+
+  return {
+    id: "insight-history-thread",
+    kind: "insight",
+    family: "Past chats",
+    familyKey: "history",
+    label: `Continue your ${primaryTopic.toLowerCase()} thread`,
+    question: favoriteQuestion.question,
+    note,
+    cta: "Reopen",
+    prompt: favoriteQuestion.question,
+    memoryId: favoriteQuestion.memory_id || 0,
+  };
+}
+
+function buildLatestDataInsightCard() {
+  if (!state.stats || !state.accessProfile) return null;
+
+  const scopeName = state.accessProfile.scope_name || "your approved coverage";
+  const trendAvailable = hasTrendData(state.stats);
+  const normalizedAllowed = normalizeMetrics(state.accessProfile?.allowed_metrics || []);
+  const hasAllMetrics = normalizedAllowed.includes("all");
+  const allowed = new Set(normalizedAllowed);
+  const attritionRate = Number(state.stats.attrition_rate_pct || 0);
+  const attritedEmployees = Number(state.stats.attrited_employees || 0);
+  const stalledEmployees = Number(state.stats.promotion_stalled_employees || 0);
+  const avgPromotionYears = Number(state.stats.avg_years_since_last_promotion || 0);
+  const latestTrendMonth = formatTrendMonth(state.stats.latest_trend_month, { month: "short", year: "numeric" });
+  const rollingAttritionRate = Number(state.stats.rolling12_attrition_rate_pct || 0);
+  const rollingPromotionRate = Number(state.stats.rolling12_promotion_rate_pct || 0);
+  const headcountMoMChangePct = Number(state.stats.headcount_mom_change_pct || 0);
+  const headcountYoYChangePct = Number(state.stats.headcount_yoy_change_pct || 0);
+  const avgYearsAtCompany = Number(state.stats.avg_years_at_company || 0);
+  const earlyTenureShare = Number((state.stats.tenure_distribution_pct || {})["0_1"] || 0);
+
+  if (hasAllMetrics || allowed.has("attrition")) {
+    const attritionLabel = !trendAvailable
+      ? "Attrition remains the leading snapshot watchpoint"
+      : rollingAttritionRate >= 15
+        ? "Attrition pressure is elevated in the latest trend"
+        : rollingAttritionRate >= 10
+          ? "Attrition deserves a closer look in the trend"
+          : "Attrition is holding fairly steady in the trend";
+    return {
+      id: "insight-live-attrition",
+      kind: "insight",
+      family: "Latest data",
+      familyKey: "attrition",
+      label: attritionLabel,
+      question: trendAvailable
+        ? `${rollingAttritionRate.toFixed(1)}% rolling attrition | ${formatSignedPercent(headcountYoYChangePct, 1)} YoY active headcount`
+        : `${attritionRate.toFixed(1)}% snapshot attrition | ${attritedEmployees.toLocaleString()} attrited employees`,
+      note: trendAvailable && latestTrendMonth
+        ? `Trend through ${latestTrendMonth} | snapshot attrition ${attritionRate.toFixed(1)}%`
+        : "Trend data will appear once the monthly layer is available in the active session.",
+      cta: "Hotspots",
+      prompt: trendAvailable
+        ? `Generate an attrition trend report for ${scopeName} for the last 12 months`
+        : `Generate an attrition report for ${scopeName}`,
+    };
+  }
+
+  if ((hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance")) && (stalledEmployees || avgPromotionYears)) {
+    return {
+      id: "insight-live-promotion",
+      kind: "insight",
+      family: "Latest data",
+      familyKey: "promotion",
+      label: trendAvailable ? "Promotion and tenure momentum are worth monitoring" : "Promotion timing deserves a closer look",
+      question: trendAvailable
+        ? `${rollingPromotionRate.toFixed(1)}% rolling promotion | ${earlyTenureShare.toFixed(1)}% in the 0-1 year tenure band`
+        : `${avgPromotionYears.toFixed(1)} years since last promotion | ${stalledEmployees.toLocaleString()} employees at 5+ years`,
+      note: trendAvailable && latestTrendMonth
+        ? `Trend through ${latestTrendMonth} | avg ${avgYearsAtCompany.toFixed(1)} years at company`
+        : `Avg ${avgPromotionYears.toFixed(1)} years since last promotion`,
+      cta: "Pressure points",
+      prompt: trendAvailable
+        ? `Generate a tenure distribution trend report for ${scopeName} for the last 12 months`
+        : `Which departments in ${scopeName} have the longest time since promotion?`,
+    };
+  }
+
+  if (hasAllMetrics || allowed.has("headcount")) {
+    return {
+      id: "insight-live-headcount",
+      kind: "insight",
+      family: "Latest data",
+      familyKey: "headcount",
+      label: trendAvailable ? "Active workforce trend is moving steadily" : "Active workforce remains stable in the current view",
+      question: trendAvailable
+        ? `${formatSignedPercent(headcountMoMChangePct, 1)} MoM | ${formatSignedPercent(headcountYoYChangePct, 1)} YoY active headcount`
+        : `${Number(state.stats.active_employees || 0).toLocaleString()} active employees | ${Number(state.stats.total_employees || 0).toLocaleString()} total headcount`,
+      note: trendAvailable && latestTrendMonth
+        ? `Trend through ${latestTrendMonth} | ${Number(state.stats.active_employees || 0).toLocaleString()} active employees in view`
+        : "Updated from the latest HR snapshot",
+      cta: "Trend",
+      prompt: trendAvailable
+        ? `Generate a headcount trend report for ${scopeName} for the last 12 months`
+        : `What is the active headcount for ${scopeName}?`,
+    };
+  }
+
+  return null;
+}
+
+function buildProactiveInsightCards() {
+  return [
+    buildRoleInsightCard(),
+    buildLatestDataInsightCard(),
+    buildHistoryInsightCard(),
+  ].filter(Boolean);
 }
 
 function buildCenterPromptCards(existingCards = []) {
@@ -1027,17 +1605,22 @@ function buildCenterPromptCards(existingCards = []) {
       .filter(Boolean),
   );
 
-  function pushPromptCard(label, question, note) {
-    const normalizedQuestion = String(question || "").trim().toLowerCase();
+  function pushPromptCard(item) {
+    const question = String(item?.question || "").trim();
+    const normalizedQuestion = question.toLowerCase();
     if (!normalizedQuestion || usedQuestions.has(normalizedQuestion)) return false;
     usedQuestions.add(normalizedQuestion);
     prompts.push({
+      id: item?.id || stableTileId("prompt", question),
+      kind: "prompt",
       family: "Prompt",
-      label: label || "Suggested next question",
+      familyKey: item?.familyKey || "prompt",
+      label: item?.label || "Suggested next question",
       question,
-      note,
-      cta: "Ask this question",
+      note: item?.note || "",
+      cta: item?.cta || "Ask this question",
       prompt: question,
+      memoryId: Number(item?.memoryId || 0),
     });
     return true;
   }
@@ -1048,37 +1631,57 @@ function buildCenterPromptCards(existingCards = []) {
     const primaryTopic = topics[0] || "Suggested next question";
     const reuseCount = Number(item?.reuse_count || 1);
     const feedbackScore = Number(item?.feedback_score || 0);
-    pushPromptCard(primaryTopic, question, centerPromptNote(primaryTopic, reuseCount, feedbackScore));
+    pushPromptCard({
+      id: stableTileId("prompt-history", `${item?.memory_id || ""}-${question}`),
+      label: primaryTopic,
+      familyKey: topicMetricKey(primaryTopic),
+      question,
+      note: centerPromptNote(primaryTopic, reuseCount, feedbackScore),
+      memoryId: item?.memory_id || 0,
+      cta: item?.memory_id ? "Reopen saved insight" : "Ask this question",
+    });
   });
 
   preferredTopicsFromHistory().forEach((topic) => {
     const topicQuestions = buildTopicQuestions(topic, state.accessProfile);
     const nextQuestion = topicQuestions.find((question) => !usedQuestions.has(String(question || "").trim().toLowerCase()));
     if (nextQuestion) {
-      pushPromptCard(topic, nextQuestion, centerPromptNote(topic));
+      pushPromptCard({
+        id: stableTileId("prompt-topic", `${topic}-${nextQuestion}`),
+        label: topic,
+        familyKey: topicMetricKey(topic),
+        question: nextQuestion,
+        note: centerPromptNote(topic),
+      });
     }
   });
 
   if (!usedFamilies.has("headcount") && (hasAllMetrics || allowed.has("headcount"))) {
-    pushPromptCard(
-      "Headcount",
-      `What is the total headcount for ${scopeName}?`,
-      "Quick view of total headcount and department mix",
-    );
+    pushPromptCard({
+      id: "prompt-default-headcount",
+      label: "Headcount",
+      familyKey: "headcount",
+      question: `What is the total headcount for ${scopeName}?`,
+      note: "Quick view of total headcount and department mix",
+    });
   }
   if (!usedFamilies.has("attrition") && (hasAllMetrics || allowed.has("attrition"))) {
-    pushPromptCard(
-      "Attrition",
-      `Show attrition by department for ${scopeName}`,
-      "Spot attrition hotspots and department risk",
-    );
+    pushPromptCard({
+      id: "prompt-default-attrition",
+      label: "Attrition",
+      familyKey: "attrition",
+      question: `Show attrition by department for ${scopeName}`,
+      note: "Spot attrition hotspots and department risk",
+    });
   }
   if (!usedFamilies.has("promotion") && (hasAllMetrics || allowed.has("tenure") || allowed.has("compensation") || allowed.has("performance"))) {
-    pushPromptCard(
-      "Promotion",
-      `Show employees with recent promotions in ${scopeName}`,
-      "Review recent promotions and salary movement",
-    );
+    pushPromptCard({
+      id: "prompt-default-promotion",
+      label: "Promotion",
+      familyKey: "promotion",
+      question: `Show employees with recent promotions in ${scopeName}`,
+      note: "Review recent promotions and salary movement",
+    });
   }
 
   const fallbackPrompts = [
@@ -1089,48 +1692,260 @@ function buildCenterPromptCards(existingCards = []) {
     },
     {
       label: "Suggested next question",
-      question: `What is the attrition rate for ${scopeName}?`,
-      note: "Check the current attrition baseline across your business units",
+      question: `Show month over month headcount trend for ${scopeName} over the last 12 months`,
+      note: "Review the latest workforce movement and trend direction",
     },
     {
       label: "Suggested next question",
-      question: `What is the average time to promotion in ${scopeName}?`,
-      note: "Review promotion timing across your business units",
+      question: `Generate an attrition trend report for ${scopeName} for the last 12 months`,
+      note: "Check rolling attrition and recent change by month",
     },
   ];
 
   fallbackPrompts.forEach((item) => {
-    pushPromptCard(item.label, item.question, item.note);
+    pushPromptCard({
+      id: stableTileId("prompt-fallback", `${item.label}-${item.question}`),
+      label: item.label,
+      familyKey: "prompt",
+      question: item.question,
+      note: item.note,
+    });
   });
 
   return prompts;
 }
 
+function buildWorkspaceTileCatalog() {
+  const proactiveCards = buildProactiveInsightCards();
+  const kpiCards = buildCenterKpiCards();
+  const promptCards = buildCenterPromptCards([...proactiveCards, ...kpiCards]);
+  return [...proactiveCards, ...kpiCards, ...promptCards];
+}
+
+function orderWorkspaceTiles(catalog = [], { includeHidden = false } = {}) {
+  const hidden = new Set(state.tilePreferences.hidden);
+  const pinOrder = state.tilePreferences.pinned;
+  const tileMap = new Map(catalog.map((tile) => [tile.id, tile]));
+  const orderedPinned = pinOrder
+    .map((tileId) => tileMap.get(tileId))
+    .filter((tile) => tile && (includeHidden || !hidden.has(tile.id)));
+  const pinnedIds = new Set(orderedPinned.map((tile) => tile.id));
+  const orderedRemaining = catalog.filter((tile) => {
+    if (!tile || pinnedIds.has(tile.id)) return false;
+    if (!includeHidden && hidden.has(tile.id)) return false;
+    return true;
+  });
+  return [...orderedPinned, ...orderedRemaining];
+}
+
+function renderWorkspacePanelHeader() {
+  if (!workspacePanelTitle || !workspacePanelSub) return;
+
+  const role = state.accessProfile?.role || "your HR role";
+  workspacePanelTitle.textContent = `${role} workspace`;
+  workspacePanelSub.textContent = "Based on your role, recent chats, current HR data, and the latest workforce trend changes.";
+}
+
+function workspaceEmptyStateMarkup() {
+  return `
+    <div class="workspace-empty-card">
+      <div class="workspace-empty-title">All tiles are currently hidden.</div>
+      <div class="workspace-empty-copy">Open tile customization to turn cards back on, or reset the layout to restore the default proactive workspace.</div>
+      <button type="button" class="workspace-customize-btn" data-reset-tiles="true">Reset tiles</button>
+    </div>
+  `;
+}
+
+function thumbtackIconMarkup() {
+  return `
+    <svg class="tile-pin-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 4h6" />
+      <path d="M10 4v5l-3 3h10l-3-3V4" />
+      <path d="M12 12v8" />
+    </svg>
+  `;
+}
+
+function tilePinButtonMarkup(tileId, isPinned) {
+  const label = isPinned ? "Unpin tile" : "Pin tile";
+  return `
+    <button
+      type="button"
+      class="tile-pin-btn${isPinned ? " active" : ""}"
+      data-tile-pin="${escAttr(tileId)}"
+      aria-pressed="${isPinned ? "true" : "false"}"
+      aria-label="${escAttr(label)}"
+      title="${escAttr(label)}"
+    >${thumbtackIconMarkup()}</button>
+  `;
+}
+
+function renderWorkspaceCard(card) {
+  const isPinned = isTilePinned(card.id);
+  const isPromptLike = card.kind === "prompt" || card.kind === "insight";
+  const promptAttr = card.prompt ? ` data-q="${escAttr(card.prompt)}"` : "";
+  const memoryAttr = card.memoryId ? ` data-memory-id="${escAttr(String(card.memoryId))}"` : "";
+
+  return `
+    <div
+      class="empty-kpi-card workspace-tile${card.kind === "prompt" ? " prompt" : ""}${card.kind === "insight" ? " insight" : ""}"
+      data-tile-id="${escAttr(card.id)}"${promptAttr}${memoryAttr}
+      ${card.prompt ? 'role="button" tabindex="0"' : ""}
+    >
+      <div class="empty-kpi-card-head">
+        <span class="empty-kpi-family">${escHtml(card.family)}</span>
+        ${tilePinButtonMarkup(card.id, isPinned)}
+      </div>
+      <span class="empty-kpi-label">${escHtml(card.label)}</span>
+      ${isPromptLike
+        ? `<span class="empty-kpi-question">${escHtml(card.question || card.prompt)}</span>`
+        : `<span class="empty-kpi-value ${escAttr(card.tone || "")}">${escHtml(card.value || "")}</span>`}
+      <div class="empty-kpi-meta">
+        <span class="empty-kpi-note">${escHtml(card.note || "")}</span>
+        ${card.cta ? `<span class="empty-kpi-cta">${escHtml(card.cta)}</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
 function renderCenterKpiBoard() {
   if (!centerKpiBoard) return;
 
-  const cards = buildCenterKpiCards();
-  const promptCards = buildCenterPromptCards(cards);
-  const allCards = [...cards, ...promptCards].slice(0, 6);
+  const allCards = orderWorkspaceTiles(buildWorkspaceTileCatalog()).slice(0, 6);
 
   if (!allCards.length) {
-    centerKpiBoard.innerHTML = "";
+    centerKpiBoard.innerHTML = workspaceEmptyStateMarkup();
     return;
   }
 
-  centerKpiBoard.innerHTML = allCards.map((card) => `
-    <button type="button" class="empty-kpi-card${card.family === "Prompt" ? " prompt" : ""}" data-q="${escAttr(card.prompt)}">
-      <span class="empty-kpi-family">${escHtml(card.family)}</span>
-      <span class="empty-kpi-label">${escHtml(card.label)}</span>
-      ${card.family === "Prompt"
-        ? `<span class="empty-kpi-question">${escHtml(card.question || card.prompt)}</span>`
-        : `<span class="empty-kpi-value ${escAttr(card.tone || "")}">${escHtml(card.value)}</span>`}
-      <span class="empty-kpi-note">${escHtml(card.note)}</span>
-      ${card.family === "Prompt"
-        ? `<span class="empty-kpi-cta">${escHtml(card.cta || "Ask this question")}</span>`
-        : ""}
-    </button>
-  `).join("");
+  centerKpiBoard.innerHTML = allCards.map((card) => renderWorkspaceCard(card)).join("");
+}
+
+function buildChatDockTiles() {
+  const catalog = buildWorkspaceTileCatalog();
+  if (!catalog.length) return [];
+
+  const pinnedTiles = orderWorkspaceTiles(catalog).filter((tile) => isTilePinned(tile.id));
+  if (pinnedTiles.length) {
+    return pinnedTiles.slice(0, 3);
+  }
+
+  return orderWorkspaceTiles(catalog)
+    .filter((tile) => tile.kind === "insight" || tile.kind === "metric")
+    .slice(0, 3);
+}
+
+function renderChatInsightCard(card) {
+  const isPinned = isTilePinned(card.id);
+  const promptAttr = card.prompt ? ` data-q="${escAttr(card.prompt)}"` : "";
+  const memoryAttr = card.memoryId ? ` data-memory-id="${escAttr(String(card.memoryId))}"` : "";
+  const primaryCopy = card.kind === "metric" ? (card.value || "") : (card.question || card.prompt || "");
+
+  return `
+    <div
+      class="chat-insight-card"
+      data-tile-id="${escAttr(card.id)}"${promptAttr}${memoryAttr}
+      ${card.prompt ? 'role="button" tabindex="0"' : ""}
+    >
+      <div class="chat-insight-card-head">
+        <span class="chat-insight-kicker">${escHtml(card.family)}</span>
+        ${tilePinButtonMarkup(card.id, isPinned)}
+      </div>
+      <div class="chat-insight-title">${escHtml(card.label)}</div>
+      <div class="chat-insight-copy">${escHtml(primaryCopy)}</div>
+      <div class="chat-insight-note">${escHtml(card.note || "")}</div>
+    </div>
+  `;
+}
+
+function renderChatInsightsDock() {
+  if (!chatInsightsDock) return;
+
+  const hasConversation = Boolean(messagesEl?.querySelector(".msg-thread"));
+  const dockTiles = hasConversation ? buildChatDockTiles() : [];
+  if (!hasConversation || !dockTiles.length) {
+    chatInsightsDock.classList.add("hidden");
+    chatInsightsDock.innerHTML = "";
+    return;
+  }
+
+  if (state.chatInsightsDismissed) {
+    chatInsightsDock.innerHTML = `
+      <div class="chat-insights-shell compact">
+        <div class="chat-insights-collapsed">
+          <div class="chat-insights-collapsed-copy">Insight tiles are hidden for this conversation.</div>
+          <button type="button" class="workspace-customize-btn compact" data-show-chat-insights="true">Show insight tiles</button>
+        </div>
+      </div>
+    `;
+    chatInsightsDock.classList.remove("hidden");
+    return;
+  }
+
+  const pinnedCount = dockTiles.filter((tile) => isTilePinned(tile.id)).length;
+  chatInsightsDock.innerHTML = `
+    <div class="chat-insights-shell">
+      <div class="chat-insights-header">
+        <div>
+          <div class="chat-insights-kicker">While you chat</div>
+          <div class="chat-insights-title">${pinnedCount ? "Pinned insight tiles" : "Proactive insight tiles"}</div>
+          <div class="chat-insights-sub">${pinnedCount
+            ? "Pinned tiles stay visible while you work through the conversation."
+            : "These high-priority tiles stay close to the conversation until you pin your own set."}</div>
+        </div>
+        <div class="chat-insights-actions">
+          <button type="button" class="workspace-customize-btn compact" data-open-tile-modal="true">Customize tiles</button>
+          <button type="button" class="chat-insights-close-btn" data-hide-chat-insights="true" aria-label="Hide insight tiles" title="Hide insight tiles">×</button>
+        </div>
+      </div>
+      <div class="chat-insights-grid">
+        ${dockTiles.map((card) => renderChatInsightCard(card)).join("")}
+      </div>
+    </div>
+  `;
+  chatInsightsDock.classList.remove("hidden");
+}
+
+function renderTileSettingsList() {
+  if (!tileSettingsList) return;
+
+  const catalog = orderWorkspaceTiles(buildWorkspaceTileCatalog(), { includeHidden: true });
+  if (!catalog.length) {
+    tileSettingsList.innerHTML = '<div class="tile-settings-empty">Tiles will appear here once your role and data context are loaded.</div>';
+    return;
+  }
+
+  tileSettingsList.innerHTML = catalog.map((card) => {
+    const isPinned = isTilePinned(card.id);
+    const isVisible = !isTileHidden(card.id);
+    const summary = card.kind === "metric"
+      ? `${card.value || ""} | ${card.note || ""}`
+      : `${card.question || card.prompt || ""} | ${card.note || ""}`;
+
+    return `
+      <div class="tile-setting-row">
+        <div class="tile-setting-copy">
+          <div class="tile-setting-label">${escHtml(card.label)}</div>
+          <div class="tile-setting-family">${escHtml(card.family)}</div>
+          <div class="tile-setting-summary">${escHtml(summary)}</div>
+        </div>
+        <div class="tile-setting-actions">
+          ${tilePinButtonMarkup(card.id, isPinned)}
+          <label class="tile-visibility-toggle">
+            <input type="checkbox" data-tile-visible="${escAttr(card.id)}" ${isVisible ? "checked" : ""} />
+            <span>Visible</span>
+          </label>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderWorkspaceSurfaces() {
+  renderWorkspacePanelHeader();
+  renderCenterKpiBoard();
+  renderChatInsightsDock();
+  renderTileSettingsList();
 }
 
 function renderMetricExamples(profile) {
@@ -1143,6 +1958,7 @@ function renderMetricExamples(profile) {
   if (hasAllMetrics || allowed.has("headcount")) {
     metrics.push("Headcount");
     metrics.push("Active headcount");
+    metrics.push("Workforce trends");
     metrics.push("Department mix");
   }
   if (hasAllMetrics || allowed.has("attrition")) {
@@ -1273,9 +2089,16 @@ function buildTopicQuestions(topic, profile) {
       `Which departments have the largest share of headcount in ${scopeName}?`,
       `Create a chart of the department mix for ${scopeName}`,
     ],
+    "workforce trends": [
+      `Show month over month headcount trend for ${scopeName} over the last 12 months`,
+      `Show year over year workforce change for ${scopeName}`,
+      `Generate a workforce trend report for ${scopeName} for the last 12 months`,
+      `Visualize the workforce trend for ${scopeName}`,
+    ],
     "attrition rate": [
       `What is the attrition rate for ${scopeName}?`,
       `Show attrition rate by department for ${scopeName}`,
+      `Generate an attrition trend report for ${scopeName} for the last 12 months`,
       `Which teams in ${scopeName} have the highest attrition risk?`,
       `Create a visualization of attrition by department for ${scopeName}`,
     ],
@@ -1300,6 +2123,7 @@ function buildTopicQuestions(topic, profile) {
     "promotion momentum": [
       `Show employees with recent promotions in ${scopeName}`,
       `How many employees in ${scopeName} were promoted in the last year?`,
+      `Generate a promotion trend report for ${scopeName} for the last 12 months`,
       `Which departments in ${scopeName} have the longest time since promotion?`,
       `Compare salary hikes and years since promotion for ${scopeName}`,
     ],
@@ -1359,6 +2183,7 @@ function suggestionIcon(prompt) {
   const lowered = prompt.toLowerCase();
   if (lowered.includes("report")) return "Report";
   if (lowered.includes("policy")) return "Policy";
+  if (lowered.includes("trend") || lowered.includes("month over month") || lowered.includes("year over year")) return "Trend";
   if (lowered.includes("attrition")) return "Risk";
   if (lowered.includes("tenure")) return "Trend";
   if (lowered.includes("satisfaction")) return "Pulse";
@@ -1403,6 +2228,227 @@ function openLlmModal() {
 
 function closeLlmModal() {
   llmModal.classList.add("hidden");
+}
+
+function openTileModal() {
+  renderTileSettingsList();
+  tileModal?.classList.remove("hidden");
+}
+
+function closeTileModal() {
+  tileModal?.classList.add("hidden");
+}
+
+function openExcelModal(exportContext) {
+  state.activeExcelExport = exportContext;
+  renderExcelBuilder();
+  excelModal?.classList.remove("hidden");
+}
+
+function closeExcelModal() {
+  excelModal?.classList.add("hidden");
+}
+
+function renderExcelBuilder() {
+  const context = state.activeExcelExport;
+  const rows = Array.isArray(context?.rows) ? context.rows : [];
+  const columns = Object.keys(rows[0] || {});
+  if (!context || !excelModalTitle || !excelColumnsList || !excelSortBy || !excelFilterColumn || !excelFilterValue) return;
+
+  excelModalTitle.textContent = "Build Your Excel Workbook";
+  excelColumnsList.innerHTML = columns.length
+    ? columns.map((column) => `
+      <label class="excel-column-option">
+        <input type="checkbox" value="${escAttr(column)}" checked />
+        <span>${escHtml(column)}</span>
+      </label>
+    `).join("")
+    : '<div class="tile-settings-empty">No columns are available in the current table.</div>';
+
+  const sortOptions = ['<option value="">None</option>', ...columns.map((column) => `<option value="${escAttr(column)}">${escHtml(column)}</option>`)];
+  excelSortBy.innerHTML = sortOptions.join("");
+  excelFilterColumn.innerHTML = ['<option value="">None</option>', ...columns.map((column) => `<option value="${escAttr(column)}">${escHtml(column)}</option>`)].join("");
+  excelSortDirection.value = "asc";
+  excelMaxRows.value = String(Math.min(rows.length || 250, 250));
+  excelIncludeSummary.checked = true;
+  if (excelPeriodGroup && excelPeriodMonths) {
+    const availableTrendPeriods = Array.isArray(context.availableTrendPeriods) && context.availableTrendPeriods.length
+      ? context.availableTrendPeriods.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+      : (state.stats?.available_trend_periods || []).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0);
+    const trendPeriods = Array.from(new Set([
+      ...availableTrendPeriods,
+      Number(context.periodMonths || 0),
+    ].filter((value) => Number.isFinite(value) && value > 0))).sort((left, right) => left - right);
+    if (isTrendReportType(context.reportType) && trendPeriods.length) {
+      excelPeriodMonths.innerHTML = trendPeriods.map((months) => (
+        `<option value="${months}">${escHtml(trendPeriodLabel(months))}</option>`
+      )).join("");
+      excelPeriodMonths.value = String(Number(context.periodMonths || trendPeriods[trendPeriods.length - 1]));
+      excelPeriodGroup.classList.remove("hidden");
+    } else {
+      excelPeriodMonths.innerHTML = "";
+      excelPeriodGroup.classList.add("hidden");
+    }
+  }
+  syncExcelFilterValues();
+}
+
+function syncExcelFilterValues() {
+  if (!excelFilterColumn || !excelFilterValue) return;
+  const context = state.activeExcelExport;
+  const rows = Array.isArray(context?.rows) ? context.rows : [];
+  const column = excelFilterColumn.value;
+  if (!column) {
+    excelFilterValue.innerHTML = '<option value="">None</option>';
+    excelFilterValue.disabled = true;
+    return;
+  }
+
+  const uniqueValues = Array.from(new Set(rows.map((row) => String(row?.[column] ?? "").trim()).filter(Boolean))).slice(0, 50);
+  excelFilterValue.innerHTML = ['<option value="">All values</option>', ...uniqueValues.map((value) => `<option value="${escAttr(value)}">${escHtml(value)}</option>`)].join("");
+  excelFilterValue.disabled = false;
+}
+
+async function downloadConfiguredExcelFromModal() {
+  const context = state.activeExcelExport;
+  if (!context) return;
+  const selectedColumns = Array.from(excelColumnsList?.querySelectorAll('input[type="checkbox"]:checked') || []).map((input) => input.value);
+  if (!selectedColumns.length) {
+    showToast("Select at least one column for the Excel export.", true);
+    return;
+  }
+  const selectedPeriodMonths = isTrendReportType(context.reportType)
+    ? (Number(excelPeriodMonths?.value || context.periodMonths || 0) || null)
+    : null;
+  const shouldRegenerateFromReport = Boolean(context.reportType);
+
+  const payload = {
+    title: context.title,
+    report_type: context.reportType || "",
+    period_months: selectedPeriodMonths,
+    session_id: shouldRegenerateFromReport ? "" : (context.useSessionTable ? state.sessionId : ""),
+    rows: shouldRegenerateFromReport ? [] : (context.useSessionTable ? [] : (context.rows || [])),
+    columns: selectedColumns,
+    sort_by: excelSortBy?.value || "",
+    sort_direction: excelSortDirection?.value || "asc",
+    max_rows: Number(excelMaxRows?.value || 0) || null,
+    include_summary: Boolean(excelIncludeSummary?.checked),
+    filter_column: excelFilterColumn?.value || "",
+    filter_value: excelFilterValue?.value || "",
+  };
+
+  const result = await downloadArtifact(
+    "/api/reports/export/excel-config",
+    payload,
+    "xlsx",
+    "Configured Excel download started.",
+    { silentError: true },
+  );
+
+  if (result.ok) {
+    closeExcelModal();
+    return;
+  }
+
+  const fallbackRows = Array.isArray(context.rows) ? context.rows : [];
+  const canUseLocalFallback = !isTrendReportType(context.reportType)
+    || !selectedPeriodMonths
+    || selectedPeriodMonths === Number(context.periodMonths || 0);
+  if (fallbackRows.length && canUseLocalFallback) {
+    try {
+      downloadLocalExcelWorkbook(context.title || "HR Export", fallbackRows, {
+        columns: selectedColumns,
+        sortBy: payload.sort_by,
+        sortDirection: payload.sort_direction,
+        maxRows: payload.max_rows,
+        includeSummary: payload.include_summary,
+        filterColumn: payload.filter_column,
+        filterValue: payload.filter_value,
+      });
+      showToast("Excel download started.");
+      closeExcelModal();
+      return;
+    } catch (error) {
+      showToast(error.message || result.message || "Could not download the export.", true);
+      return;
+    }
+  }
+
+  if (isTrendReportType(context.reportType) && selectedPeriodMonths && selectedPeriodMonths !== Number(context.periodMonths || 0)) {
+    showToast(result.message || "Could not regenerate the selected trend period for export.", true);
+    return;
+  }
+
+  showToast(result.message || "Could not download the export.", true);
+}
+
+function persistTilePreferences() {
+  localStorage.setItem("hr_workspace_tile_preferences", JSON.stringify(state.tilePreferences));
+}
+
+function isTilePinned(tileId) {
+  return state.tilePreferences.pinned.includes(tileId);
+}
+
+function isTileHidden(tileId) {
+  return state.tilePreferences.hidden.includes(tileId);
+}
+
+function setTilePreferences(nextPreferences) {
+  state.tilePreferences = normalizeTilePreferences(nextPreferences);
+  persistTilePreferences();
+  renderWorkspaceSurfaces();
+}
+
+function toggleTilePin(tileId) {
+  const normalizedTileId = String(tileId || "").trim();
+  if (!normalizedTileId) return;
+
+  const pinned = state.tilePreferences.pinned.filter((id) => id !== normalizedTileId);
+  const hidden = state.tilePreferences.hidden.filter((id) => id !== normalizedTileId);
+  const willPin = !state.tilePreferences.pinned.includes(normalizedTileId);
+
+  if (willPin) {
+    pinned.unshift(normalizedTileId);
+  }
+
+  setTilePreferences({ pinned, hidden });
+  showToast(willPin ? "Tile pinned to your workspace." : "Tile unpinned from your workspace.");
+}
+
+function setTileVisibility(tileId, visible) {
+  const normalizedTileId = String(tileId || "").trim();
+  if (!normalizedTileId) return;
+
+  const pinned = visible
+    ? state.tilePreferences.pinned
+    : state.tilePreferences.pinned.filter((id) => id !== normalizedTileId);
+  const hidden = visible
+    ? state.tilePreferences.hidden.filter((id) => id !== normalizedTileId)
+    : [...state.tilePreferences.hidden, normalizedTileId];
+
+  setTilePreferences({ pinned, hidden });
+}
+
+function handleTileSettingsChange(event) {
+  const toggle = event.target instanceof HTMLElement
+    ? event.target.closest("[data-tile-visible]")
+    : null;
+  if (!toggle) return;
+  const tileId = toggle.dataset.tileVisible || "";
+  const isVisible = Boolean(toggle.checked);
+  setTileVisibility(tileId, isVisible);
+}
+
+function resetTilePreferences() {
+  setTilePreferences({ ...DEFAULT_TILE_PREFERENCES });
+  showToast("Workspace tiles reset to the default layout.");
+}
+
+function setChatInsightsDismissed(dismissed) {
+  state.chatInsightsDismissed = Boolean(dismissed);
+  localStorage.setItem("hr_chat_insights_dismissed", String(state.chatInsightsDismissed));
+  renderChatInsightsDock();
 }
 
 function updateConnectionButton() {
@@ -1487,8 +2533,14 @@ function closeTopbarReveal() {
 }
 
 function buildPersonalizedKpiPrompts() {
-  const topics = Array.isArray(state.historySummary.favoriteKpis) && state.historySummary.favoriteKpis.length
+  const favoriteKpis = Array.isArray(state.historySummary.favoriteKpis)
     ? state.historySummary.favoriteKpis.map((item) => String(item?.topic || "").trim()).filter(Boolean)
+    : [];
+  const favoriteTopics = Array.isArray(state.historySummary.favoriteTopics)
+    ? state.historySummary.favoriteTopics.map((item) => String(item?.topic || "").trim()).filter(Boolean)
+    : [];
+  const topics = [...favoriteKpis, ...favoriteTopics].length
+    ? [...favoriteKpis, ...favoriteTopics]
     : preferredTopicsFromHistory().filter((topic) => topic !== "Access policy guidance");
 
   const uniqueTopics = Array.from(new Set(topics)).slice(0, 4);
@@ -1624,6 +2676,7 @@ async function recallStoredInsight(memoryId, fallbackQuestion = "") {
 
   if (emptyState) emptyState.style.display = "none";
   const thread = ensureMessageThread();
+  renderChatInsightsDock();
   const recalledQuestion = String(fallbackQuestion || "").trim();
   if (recalledQuestion) {
     appendUserMsg(thread, recalledQuestion);
@@ -1708,6 +2761,7 @@ async function handleSend() {
   if (emptyState) emptyState.style.display = "none";
 
   const thread = ensureMessageThread();
+  renderChatInsightsDock();
   appendUserMsg(thread, text);
   const assistantRow = createAssistantPlaceholder(thread);
   const contentWrap = assistantRow.querySelector(".msg-content");
@@ -1794,6 +2848,8 @@ async function streamChat(payload, contentWrap) {
             contentWrap.appendChild(buildTableCard(event.title || "Query Preview", event.table_data, {
               toolName: event.name || "",
               reportType: event.report_type || "",
+              reportPeriodMonths: Number(event.report_period_months || 0) || null,
+              availableTrendPeriods: state.stats?.available_trend_periods || [],
               tableTotalRows: Number(event.table_total_rows || 0),
             }));
             contentWrap.appendChild(typingEl);
@@ -1912,6 +2968,7 @@ function buildChartCard(event) {
     includeBestFor: true,
     includeWatchOut: false,
   });
+  const exportContext = buildChartExportContext(event, event.title || "Chart story");
 
   card.innerHTML = `
     <div class="chart-card-header">
@@ -1921,8 +2978,13 @@ function buildChartCard(event) {
         <div class="chart-card-sub">${escHtml(descriptor.note)}</div>
         ${chartDetails ? `<div class="chart-card-details">${chartDetails}</div>` : ""}
       </div>
-      <div class="chart-card-meta">
+      <div class="chart-card-side">
+        <div class="chart-card-actions">
+          <button type="button" class="table-action-btn" data-chart-action="ppt">PowerPoint</button>
+        </div>
+        <div class="chart-card-meta">
         ${chips.map((chip) => `<span class="chart-pill">${escHtml(chip)}</span>`).join("")}
+        </div>
       </div>
     </div>
     <div class="chart-container"></div>
@@ -1930,16 +2992,18 @@ function buildChartCard(event) {
 
   const container = card.querySelector(".chart-container");
   renderPlotlyFigure(container, event.chart_json);
+  card.querySelector('[data-chart-action="ppt"]')?.addEventListener("click", () => downloadInsightPpt(exportContext));
 
   return card;
 }
 
 function buildTableMetaLabel(rowCount, meta = {}) {
+  const periodLabel = trendPeriodLabel(meta.reportPeriodMonths);
   const totalRows = Number(meta.tableTotalRows || 0);
   if (totalRows > rowCount) {
-    return `${rowCount.toLocaleString()} of ${totalRows.toLocaleString()} rows shown`;
+    return `${periodLabel ? `${periodLabel} | ` : ""}${rowCount.toLocaleString()} of ${totalRows.toLocaleString()} rows shown`;
   }
-  return `${rowCount.toLocaleString()} rows shown`;
+  return `${periodLabel ? `${periodLabel} | ` : ""}${rowCount.toLocaleString()} rows shown`;
 }
 
 function looksLikeIdentifierColumn(columnName) {
@@ -1979,55 +3043,314 @@ function isVisualizationCandidate(rows) {
   return numericColumns.length >= 1 && dimensionColumns.length >= 1;
 }
 
-function getTableAction(title, rows, meta = {}) {
-  if (meta.reportType) {
-    return {
-      kind: "download_excel",
-      label: "Download Excel",
-      reportType: meta.reportType,
-    };
-  }
+function getTableActions(title, rows, meta = {}) {
+  const actions = [];
+  const isLatestTable = Boolean(
+    state.lastTable
+    && state.lastTable.title === title
+    && Array.isArray(state.lastTable.rows)
+    && state.lastTable.rows.length >= rows.length
+  );
 
   if (isVisualizationCandidate(rows)) {
-    return {
-      kind: "visualize",
-      label: "Visual options",
-    };
+    actions.push({ kind: "visualize", label: "Visual options" });
   }
 
-  return null;
+  actions.push(
+    { kind: "configure_excel", label: "Configure Excel", useSessionTable: isLatestTable },
+  );
+
+  if (meta.reportType) {
+    actions.push({
+      kind: "download_excel",
+      label: "Quick Excel",
+      reportType: meta.reportType,
+      reportPeriodMonths: Number(meta.reportPeriodMonths || 0) || null,
+    });
+  }
+
+  return actions;
 }
 
-async function downloadReportExcel(reportType, title) {
+function fileNameBase(title, fallback = "report") {
+  return `${String(title || fallback).trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || fallback}`;
+}
+
+function presentableTitle(title, fallback = "Query result") {
+  const raw = String(title || "").trim();
+  if (!raw) return fallback;
+  if (raw === "query_hr_database") return fallback;
+  if (/^[a-z0-9_]+$/i.test(raw)) {
+    return raw
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+  return raw;
+}
+
+function downloadBlob(blob, fileName) {
+  const downloadUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = downloadUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+}
+
+async function requestArtifact(endpoint, payload) {
   try {
-    const response = await fetch("/api/reports/export/excel", {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ report_type: reportType, title }),
+      body: JSON.stringify(payload),
     });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || contentType.includes("application/json") || contentType.startsWith("text/")) {
+      const rawMessage = await response.text().catch(() => "");
+      let message = `HTTP ${response.status}`;
+      if (rawMessage) {
+        try {
+          const parsed = JSON.parse(rawMessage);
+          message = parsed.detail || parsed.message || message;
+        } catch {
+          message = rawMessage.slice(0, 180).trim() || message;
+        }
+      }
+      throw new Error(message);
     }
 
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${String(title || "report").trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") || "report"}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast("Excel download started.");
+    if (!blob.size) {
+      throw new Error("The export returned an empty file.");
+    }
+    return {
+      ok: true,
+      status: response.status,
+      message: "",
+      blob,
+    };
   } catch (error) {
-    showToast(error.message || "Could not download the Excel report.", true);
+    return {
+      ok: false,
+      status: Number(error?.status || 0) || 0,
+      message: error.message || "Could not download the export.",
+      blob: null,
+    };
   }
+}
+
+async function downloadArtifact(endpoint, payload, extension, successMessage, options = {}) {
+  const result = await requestArtifact(endpoint, payload);
+  if (!result.ok) {
+    if (!options.silentError) {
+      showToast(result.message || "Could not download the export.", true);
+    }
+    return result;
+  }
+  downloadBlob(result.blob, `${fileNameBase(payload?.title, "report")}.${extension}`);
+  showToast(successMessage);
+  return result;
+}
+
+async function downloadReportExcel(reportType, title, periodMonths = null) {
+  await downloadArtifact("/api/reports/export/excel", { report_type: reportType, title, period_months: periodMonths }, "xls", "Excel download started.");
+}
+
+async function downloadInsightPdf(context) {
+  await downloadArtifact("/api/reports/export/pdf", {
+    title: context.title,
+    report_type: context.reportType || "",
+    period_months: context.periodMonths || null,
+    session_id: context.useSessionTable ? state.sessionId : "",
+    rows: context.useSessionTable ? [] : (context.rows || []),
+    question: context.question || "",
+    chart_spec: context.chartSpec || {},
+  }, "pdf", "PDF report download started.");
+}
+
+async function downloadInsightPpt(context) {
+  await downloadArtifact("/api/reports/export/ppt", {
+    title: context.title,
+    report_type: context.reportType || "",
+    period_months: context.periodMonths || null,
+    session_id: context.useSessionTable ? state.sessionId : "",
+    rows: context.useSessionTable ? [] : (context.rows || []),
+    question: context.question || "",
+    chart_spec: context.chartSpec || {},
+  }, "pptx", "PowerPoint download started.");
+}
+
+function normalizeExcelCell(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function excelXmlEscape(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function sanitizeExcelSheetName(value, fallback = "Sheet1") {
+  const cleaned = String(value || fallback)
+    .replace(/[\\/*?:\[\]]/g, " ")
+    .trim()
+    .slice(0, 31);
+  return cleaned || fallback;
+}
+
+function compareExcelValues(left, right, direction = "asc") {
+  const leftNumber = parseNumericValue(left);
+  const rightNumber = parseNumericValue(right);
+  let result = 0;
+  if (leftNumber !== null && rightNumber !== null) {
+    result = leftNumber - rightNumber;
+  } else {
+    result = String(left ?? "").localeCompare(String(right ?? ""), undefined, { numeric: true, sensitivity: "base" });
+  }
+  return direction === "desc" ? -result : result;
+}
+
+function shapeExcelRows(rows, options = {}) {
+  const workingRows = Array.isArray(rows) ? rows.map((row) => ({ ...(row || {}) })) : [];
+  const filterColumn = String(options.filterColumn || "").trim();
+  const filterValue = String(options.filterValue || "").trim();
+  const sortBy = String(options.sortBy || "").trim();
+  const sortDirection = String(options.sortDirection || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const maxRows = Number(options.maxRows || 0);
+  const allColumns = options.columns?.length
+    ? options.columns
+    : Object.keys(workingRows[0] || {});
+
+  let filteredRows = workingRows;
+  if (filterColumn && filterValue) {
+    filteredRows = filteredRows.filter((row) => String(row?.[filterColumn] ?? "").trim() === filterValue);
+  }
+
+  if (sortBy) {
+    filteredRows.sort((left, right) => compareExcelValues(left?.[sortBy], right?.[sortBy], sortDirection));
+  }
+
+  if (maxRows > 0) {
+    filteredRows = filteredRows.slice(0, maxRows);
+  }
+
+  const projectedRows = filteredRows.map((row) => {
+    const nextRow = {};
+    allColumns.forEach((column) => {
+      nextRow[column] = row?.[column];
+    });
+    return nextRow;
+  });
+
+  return {
+    columns: allColumns,
+    rows: projectedRows,
+    summary: {
+      sourceRows: workingRows.length,
+      exportedRows: projectedRows.length,
+      filterColumn,
+      filterValue,
+      sortBy,
+      sortDirection,
+    },
+  };
+}
+
+function buildExcelXmlCells(columns, rows) {
+  const headerRow = `<Row>${columns.map((column) => `<Cell ss:StyleID="Header"><Data ss:Type="String">${excelXmlEscape(column)}</Data></Cell>`).join("")}</Row>`;
+  const bodyRows = rows.map((row) => `<Row>${columns.map((column) => {
+    const rawValue = row?.[column];
+    const numericValue = parseNumericValue(rawValue);
+    const textValue = normalizeExcelCell(rawValue);
+    if (numericValue !== null && /^-?\d+(\.\d+)?$/.test(String(textValue).trim().replace(/,/g, "").replace(/%$/, ""))) {
+      return `<Cell><Data ss:Type="Number">${numericValue}</Data></Cell>`;
+    }
+    return `<Cell><Data ss:Type="String">${excelXmlEscape(textValue)}</Data></Cell>`;
+  }).join("")}</Row>`).join("");
+  return `${headerRow}${bodyRows}`;
+}
+
+function buildClientExcelWorkbook(title, rows, options = {}) {
+  const shaped = shapeExcelRows(rows, options);
+  const sheetName = sanitizeExcelSheetName(title, "HR Export");
+  const summaryRows = [
+    ["Report", title || "HR Export"],
+    ["Rows exported", String(shaped.summary.exportedRows)],
+    ["Rows available", String(shaped.summary.sourceRows)],
+    ["Columns", shaped.columns.join(", ") || "None"],
+    ["Filter", shaped.summary.filterColumn && shaped.summary.filterValue ? `${shaped.summary.filterColumn} = ${shaped.summary.filterValue}` : "None"],
+    ["Sort", shaped.summary.sortBy ? `${shaped.summary.sortBy} (${shaped.summary.sortDirection})` : "None"],
+  ];
+
+  const summaryXml = summaryRows.map((row) => `<Row>${row.map((cell, index) => `<Cell${index === 0 ? ' ss:StyleID="Header"' : ""}><Data ss:Type="String">${excelXmlEscape(cell)}</Data></Cell>`).join("")}</Row>`).join("");
+
+  return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Default" ss:Name="Normal">
+      <Alignment ss:Vertical="Bottom"/>
+      <Borders/>
+      <Font ss:FontName="Calibri" ss:Size="11"/>
+      <Interior/>
+      <NumberFormat/>
+      <Protection/>
+    </Style>
+    <Style ss:ID="Header">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/>
+    </Style>
+  </Styles>
+  ${options.includeSummary ? `
+  <Worksheet ss:Name="Summary">
+    <Table>${summaryXml}</Table>
+  </Worksheet>` : ""}
+  <Worksheet ss:Name="${excelXmlEscape(sheetName)}">
+    <Table>${buildExcelXmlCells(shaped.columns, shaped.rows)}</Table>
+  </Worksheet>
+</Workbook>`;
+}
+
+function downloadLocalExcelWorkbook(title, rows, options = {}) {
+  const workbookXml = buildClientExcelWorkbook(title, rows, options);
+  const blob = new Blob([workbookXml], { type: "application/vnd.ms-excel;charset=utf-8" });
+  downloadBlob(blob, `${fileNameBase(title, "report")}.xls`);
+}
+
+function buildChartExportContext(event, fallbackTitle = "Chart story") {
+  return {
+    title: presentableTitle(event?.title || fallbackTitle, "Chart story"),
+    rows: state.lastTable?.rows || [],
+    reportType: "",
+    periodMonths: null,
+    useSessionTable: Boolean(state.sessionId && state.lastTable?.rows?.length),
+    question: event?.business_question || event?.question || "",
+    chartSpec: {
+      chart_type: event?.chart_type || "",
+      x_column: event?.x_column || "",
+      y_column: event?.y_column || "",
+      color_column: event?.color_column || "",
+      size_column: event?.size_column || "",
+      title: event?.title || fallbackTitle,
+    },
+  };
 }
 
 function buildTableCard(title, rows, meta = {}) {
   const card = document.createElement("div");
   card.className = "table-wrap";
+  const displayTitle = presentableTitle(title, meta.reportType ? "HR report" : "Query result");
 
   if (!Array.isArray(rows) || !rows.length) {
     card.innerHTML = '<div class="table-title">No rows returned</div>';
@@ -2035,7 +3358,7 @@ function buildTableCard(title, rows, meta = {}) {
   }
 
   const tableContext = buildTableContext(title, rows);
-  const action = getTableAction(title, rows, meta);
+  const actions = getTableActions(title, rows, meta);
   const columns = Object.keys(rows[0]);
   const head = columns.map((column) => `<th>${escHtml(column)}</th>`).join("");
   const body = rows.map((row) => {
@@ -2046,10 +3369,10 @@ function buildTableCard(title, rows, meta = {}) {
   card.innerHTML = `
     <div class="table-header">
       <div>
-        <div class="table-title">${escHtml(title)}</div>
+        <div class="table-title">${escHtml(displayTitle)}</div>
         <div class="table-meta">${escHtml(buildTableMetaLabel(rows.length, meta))}</div>
       </div>
-      ${action ? `<div class="table-actions"><button class="table-action-btn" type="button">${escHtml(action.label)}</button></div>` : ""}
+      ${actions.length ? `<div class="table-actions">${actions.map((action) => `<button class="table-action-btn" type="button" data-table-action="${escAttr(action.kind)}">${escHtml(action.label)}</button>`).join("")}</div>` : ""}
     </div>
     <div class="table-scroll">
       <table>
@@ -2058,13 +3381,28 @@ function buildTableCard(title, rows, meta = {}) {
       </table>
     </div>
   `;
-  const actionButton = card.querySelector(".table-action-btn");
-  if (actionButton && action?.kind === "visualize") {
-    actionButton.addEventListener("click", () => requestVisualizationOptions(tableContext));
-  }
-  if (actionButton && action?.kind === "download_excel") {
-    actionButton.addEventListener("click", () => downloadReportExcel(action.reportType, title));
-  }
+  card.querySelectorAll("[data-table-action]").forEach((button) => {
+    const action = actions.find((item) => item.kind === button.dataset.tableAction);
+    if (!action) return;
+    if (action.kind === "visualize") {
+      button.addEventListener("click", () => requestVisualizationOptions(tableContext));
+      return;
+    }
+    if (action.kind === "download_excel") {
+      button.addEventListener("click", () => downloadReportExcel(action.reportType, displayTitle, action.reportPeriodMonths));
+      return;
+    }
+    if (action.kind === "configure_excel") {
+      button.addEventListener("click", () => openExcelModal({
+        title: displayTitle,
+        rows,
+        reportType: meta.reportType || "",
+        periodMonths: Number(meta.reportPeriodMonths || 0) || null,
+        availableTrendPeriods: Array.isArray(meta.availableTrendPeriods) ? meta.availableTrendPeriods : (state.stats?.available_trend_periods || []),
+        useSessionTable: Boolean(action.useSessionTable),
+      }));
+    }
+  });
   return card;
 }
 
@@ -2114,7 +3452,10 @@ function buildVisualOptionsCard(event) {
             <div class="visual-preview-label">Live preview</div>
             <div class="visual-preview-title"></div>
           </div>
-          <div class="visual-preview-meta"></div>
+          <div class="visual-preview-side">
+            <button type="button" class="table-action-btn" data-visual-export="ppt">PowerPoint</button>
+            <div class="visual-preview-meta"></div>
+          </div>
         </div>
         <div class="visual-preview-reason"></div>
         <div class="visual-preview-details"></div>
@@ -2133,6 +3474,8 @@ function buildVisualOptionsCard(event) {
   const previewDetails = card.querySelector(".visual-preview-details");
   const previewMeta = card.querySelector(".visual-preview-meta");
   const previewChart = card.querySelector(".visual-preview-chart");
+  const exportButton = card.querySelector('[data-visual-export="ppt"]');
+  let activeOption = recommendedOption?.option || options[0];
 
   if (recommendedOption) {
     recommendationTitle.textContent = recommendedOption.option.title || recommendedDescriptor.label;
@@ -2149,6 +3492,7 @@ function buildVisualOptionsCard(event) {
   }
 
   const setActiveOption = (option) => {
+    activeOption = option;
     const summary = summarizePlotlyFigure(option.chart_json);
     const descriptor = chartTypeDescriptor(summary?.chartType || option.chart_type);
     const optionDetails = renderVisualizationDetails(option, {
@@ -2201,6 +3545,11 @@ function buildVisualOptionsCard(event) {
     `;
     button.addEventListener("click", () => setActiveOption(option));
     grid.appendChild(button);
+  });
+
+  exportButton?.addEventListener("click", () => {
+    if (!activeOption) return;
+    downloadInsightPpt(buildChartExportContext(activeOption, activeOption.title || sourceTitle));
   });
 
   setActiveOption((optionSummaries.find((item) => item.option.id === recommendedId) || optionSummaries[0]).option);
@@ -2292,7 +3641,7 @@ function shouldAttachTableContext(message) {
 function requestVisualizationOptions(tableContext) {
   if (!tableContext?.rows?.length) return;
   state.pendingTableContext = buildTableContext(tableContext.title, tableContext.rows);
-  chatInput.value = "Suggest 3 executive-ready visualization options for this table, emphasize clarity and comparison, and recommend the best one.";
+  chatInput.value = "Suggest 3 executive-ready visualization options for this table. Think like a consultant, favor lollipop, treemap, heatmap, bubble, or indicator views when they fit better than basic bar or pie charts, and recommend the best one.";
   onInputChange();
   handleSend();
 }
@@ -2356,6 +3705,12 @@ function chartTypeDescriptor(chartType) {
         badge: "Ranking",
         note: "Best for comparing categories side by side and making the ranking obvious.",
       };
+    case "lollipop":
+      return {
+        label: "Lollipop chart",
+        badge: "Ranking",
+        note: "Best for consultant-style ranking views that feel lighter than a full bar chart.",
+      };
     case "horizontal_bar":
       return {
         label: "Horizontal bar",
@@ -2386,6 +3741,12 @@ function chartTypeDescriptor(chartType) {
         badge: "Relationship",
         note: "Best for checking spread, clusters, and relationships between two measures.",
       };
+    case "bubble":
+      return {
+        label: "Bubble chart",
+        badge: "Relationship",
+        note: "Best for showing relationship, scale, and grouping in one executive-ready view.",
+      };
     case "histogram":
       return {
         label: "Histogram",
@@ -2405,11 +3766,23 @@ function chartTypeDescriptor(chartType) {
         badge: "Share",
         note: "Best only when a small set of categories needs a simple share view.",
       };
+    case "treemap":
+      return {
+        label: "Treemap",
+        badge: "Composition",
+        note: "Best for showing relative weight across categories without relying on pie slices.",
+      };
     case "heatmap":
       return {
         label: "Heatmap",
         badge: "Hotspots",
         note: "Best for spotting the strongest and weakest combinations across two dimensions.",
+      };
+    case "indicator":
+      return {
+        label: "Indicator",
+        badge: "Headline",
+        note: "Best for one-number summary views on dashboards, one-pagers, and decks.",
       };
     default:
       return {
@@ -2727,7 +4100,16 @@ function markdownToHtml(markdown) {
     tableLines = [];
   };
 
-  for (const rawLine of lines) {
+  const findNextNonEmptyLine = (startIndex) => {
+    for (let index = startIndex + 1; index < lines.length; index += 1) {
+      const candidate = lines[index].trim();
+      if (candidate) return candidate;
+    }
+    return "";
+  };
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex];
     const line = rawLine.trimEnd();
     const trimmed = line.trim();
 
@@ -2755,6 +4137,10 @@ function markdownToHtml(markdown) {
     }
 
     if (!trimmed) {
+      const nextNonEmptyLine = findNextNonEmptyLine(lineIndex);
+      if (tableLines.length && isPipeTableLine(nextNonEmptyLine)) {
+        continue;
+      }
       flushQuote();
       flushTable();
       flushMetricSummary();
@@ -2960,9 +4346,11 @@ function isSectionLabelLine(line) {
 function isPipeTableLine(line) {
   const trimmed = String(line || "").trim();
   const pipeCount = (trimmed.match(/\|/g) || []).length;
-  if (pipeCount < 2) return false;
+  if (pipeCount < 1) return false;
+  const cells = splitMarkdownTableRow(trimmed).filter((cell) => cell.trim());
+  if (cells.length < 2) return false;
   if (trimmed.startsWith("|") || trimmed.endsWith("|")) return true;
-  return trimmed.split("|").filter((cell) => cell.trim()).length >= 3;
+  return cells.length >= 2;
 }
 
 function splitMarkdownTableRow(line) {
@@ -2972,6 +4360,16 @@ function splitMarkdownTableRow(line) {
 
 function isMarkdownTableSeparator(row) {
   return Array.isArray(row) && row.length > 0 && row.every((cell) => /^:?-{2,}:?$/.test(String(cell || "").trim()));
+}
+
+function looksLikeMarkdownTableDataRow(row, columnCount) {
+  if (!Array.isArray(row) || !row.length) return false;
+  const populatedCells = row.filter((cell) => String(cell || "").trim());
+  if (populatedCells.length < 2) return false;
+  if (typeof columnCount === "number" && columnCount > 0) {
+    return populatedCells.length >= Math.max(2, Math.min(columnCount, populatedCells.length));
+  }
+  return true;
 }
 
 function normalizeMarkdownTableRow(row, columnCount) {
@@ -2996,17 +4394,29 @@ function renderMarkdownTable(lines) {
   if (!Array.isArray(lines) || lines.length < 2) return "";
 
   const rows = lines.map(splitMarkdownTableRow).filter((row) => row.length && row.some((cell) => cell.length));
-  if (rows.length < 2 || !isMarkdownTableSeparator(rows[1])) {
+  if (rows.length < 2) {
     return "";
   }
 
   const header = rows[0];
   const columnCount = header.length;
-  const alignments = normalizeMarkdownTableRow(rows[1], columnCount).map(getMarkdownTableAlignment);
+  const hasExplicitSeparator = isMarkdownTableSeparator(rows[1]);
+  const alignments = hasExplicitSeparator
+    ? normalizeMarkdownTableRow(rows[1], columnCount).map(getMarkdownTableAlignment)
+    : Array.from({ length: columnCount }, (_, index) => {
+      const headerCell = String(header[index] || "").trim();
+      const bodyValues = rows.slice(1).map((row) => String(row[index] || "").trim()).filter(Boolean);
+      const sampleValues = [headerCell, ...bodyValues];
+      return sampleValues.every((value) => /^[\d\s,.%$()-]+$/.test(value)) ? "right" : "left";
+    });
   const bodyRows = rows
-    .slice(2)
+    .slice(hasExplicitSeparator ? 2 : 1)
     .map((row) => normalizeMarkdownTableRow(row, columnCount))
     .filter((row) => row.some((cell) => cell.trim()));
+
+  if (!hasExplicitSeparator && !bodyRows.every((row) => looksLikeMarkdownTableDataRow(row, columnCount))) {
+    return "";
+  }
 
   if (!columnCount || !bodyRows.length) {
     return "";
@@ -3303,6 +4713,8 @@ async function loadHistory() {
     state.pastHistoryItems = [];
     renderHistoryState(relevantHistoryList, error.message || "Could not load history");
     renderHistoryState(pastHistoryList, error.message || "Could not load history");
+    renderWorkspaceSurfaces();
+    updateTopbarSub();
   }
 }
 
@@ -3354,6 +4766,36 @@ function coffeeLogoMarkup() {
 
 function normalizeMetrics(metrics) {
   return (metrics || []).map((metric) => String(metric || "").toLowerCase());
+}
+
+function friendlyMetricTopic(metric) {
+  const normalized = String(metric || "").trim().toLowerCase();
+  const mapping = {
+    "headcount": "Headcount",
+    "trend": "Workforce trends",
+    "attrition": "Attrition rate",
+    "compensation": "Compensation bands",
+    "performance": "Performance ratings",
+    "satisfaction": "Satisfaction pulse",
+    "tenure": "Tenure mix",
+    "demographics": "Demographic mix",
+    "policy": "Access policy guidance",
+  };
+  return mapping[normalized] || "";
+}
+
+function simpleHash(value) {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function stableTileId(prefix, seed = "") {
+  return `${prefix}-${simpleHash(seed || prefix)}`;
 }
 
 function truncate(value, length) {

@@ -375,6 +375,105 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertEqual(clarification, "")
 
+    def test_simple_trend_chart_request_routes_to_visualization(self):
+        agent = self._make_agent()
+
+        route = agent._route_request("show me a mom trend of attrition", None, self.access_profile)
+
+        self.assertEqual(route, "visualization")
+
+    def test_promo_trend_shorthand_with_three_year_and_lab_tech_is_parsed_correctly(self):
+        agent = self._make_agent()
+
+        spec = agent._direct_trend_visual_spec(
+            "show this 3 year promo trend for only lab tech",
+            self.access_profile,
+        )
+
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec["report_type"], "promotion_trend")
+        self.assertEqual(spec["period_months"], 36)
+        self.assertEqual(spec["job_role_filter"], "Laboratory Technician")
+        self.assertEqual(spec["y_column"], "MonthlyPromotionRatePct")
+        self.assertIn("Promotion Trend", spec["title"])
+        self.assertIn("Laboratory Technician", spec["title"])
+
+    def test_simple_trend_chart_request_skips_report_workflow_and_returns_chart(self):
+        agent = self._make_agent(llm_client=ExplodingLLMClient())
+
+        def execute_stub(tool_name, tool_input, access_profile=None, table_context=None):
+            if tool_name == "generate_standard_report":
+                return json.dumps(
+                    {
+                        "report_name": "Attrition Trend Report | Last 12 Months",
+                        "report_type": "attrition_trend",
+                        "report_period_months": 12,
+                        "results": [
+                            {"SnapshotMonth": "2025-04-01", "MonthlyAttritionRatePct": 1.1, "Rolling12AttritionRatePct": 14.8},
+                            {"SnapshotMonth": "2025-05-01", "MonthlyAttritionRatePct": 1.3, "Rolling12AttritionRatePct": 15.1},
+                            {"SnapshotMonth": "2025-06-01", "MonthlyAttritionRatePct": 1.0, "Rolling12AttritionRatePct": 15.0},
+                        ],
+                    }
+                )
+            if tool_name == "create_visualization":
+                return json.dumps(
+                    {
+                        "chart_json": "{\"data\": [], \"layout\": {}}",
+                        "title": "Attrition Trend | Business Units | Last 12 Months",
+                        "chart_type": "line",
+                        "x_column": "SnapshotMonth",
+                        "y_column": "MonthlyAttritionRatePct",
+                        "business_question": "How is attrition moving month over month?",
+                        "best_for": "Trend direction and inflection points over time.",
+                        "watch_out": "Only use when the x-axis has a real order.",
+                    }
+                )
+            raise AssertionError(f"Unexpected tool call: {tool_name}")
+
+        agent.executor.execute = execute_stub
+
+        events = list(agent.chat("show me a mom trend of attrition", self.access_profile))
+
+        event_types = [event["type"] for event in events]
+        self.assertEqual(event_types, ["chart", "final_text"])
+        self.assertIn("monthly attrition rate trend", events[-1]["text"].lower())
+        self.assertNotIn("Before I build that table", events[-1]["text"])
+        self.assertIn("### Follow-up questions", events[-1]["text"])
+
+    def test_filtered_promo_trend_request_uses_filtered_rows_and_returns_chart(self):
+        agent = self._make_agent(llm_client=ExplodingLLMClient())
+        agent._build_filtered_trend_rows = lambda spec, access_profile: [
+            {"SnapshotMonth": "2023-04-01", "MonthlyPromotionRatePct": 0.9},
+            {"SnapshotMonth": "2023-05-01", "MonthlyPromotionRatePct": 1.1},
+            {"SnapshotMonth": "2023-06-01", "MonthlyPromotionRatePct": 1.4},
+        ]
+
+        def execute_stub(tool_name, tool_input, access_profile=None, table_context=None):
+            if tool_name == "create_visualization":
+                return json.dumps(
+                    {
+                        "chart_json": "{\"data\": [], \"layout\": {}}",
+                        "title": tool_input["title"],
+                        "chart_type": "line",
+                        "x_column": "SnapshotMonth",
+                        "y_column": tool_input["y_column"],
+                        "business_question": "How is monthly promotion rate changing over snapshot month?",
+                        "best_for": "Trend direction and inflection points over time.",
+                        "watch_out": "Only use when the x-axis has a real order.",
+                    }
+                )
+            raise AssertionError(f"Unexpected tool call: {tool_name}")
+
+        agent.executor.execute = execute_stub
+
+        events = list(agent.chat("show this 3 year promo trend for only lab tech", self.access_profile))
+
+        event_types = [event["type"] for event in events]
+        self.assertEqual(event_types, ["chart", "final_text"])
+        self.assertIn("filtered to Laboratory Technician", events[-1]["text"])
+        self.assertIn("36 months", events[-1]["text"])
+        self.assertNotIn("Before I build that table", events[-1]["text"])
+
     def test_underspecified_employee_listing_request_also_triggers_clarification(self):
         agent = self._make_agent(llm_client=ExplodingLLMClient())
 

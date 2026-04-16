@@ -61,7 +61,10 @@ TOOLS = [
             "attrition rates, salaries, job roles, departments, satisfaction scores, "
             "tenure, promotions, performance ratings, or any other structured HR data. "
             "Use `employees_current` or `employees` for current snapshot analysis. "
-            "Do not invent historical or month-over-month trends because this dataset is a single snapshot. "
+            "Use `workforce_monthly_summary` for simulated month-over-month or year-over-year trends, "
+            "and use `employees_monthly_history` or `workforce_monthly_events` only when a trend question needs "
+            "historical employee-cut or event detail. "
+            "If you use the simulated trend tables, clearly say the trend is simulated from the current workforce baseline. "
             "Always use SELECT statements only. The full database schema is in your system prompt."
         ),
         "input_schema": {
@@ -117,7 +120,7 @@ TOOLS = [
             "Use this when the user asks for a specific chart, graph, visualization, or plot. "
             "If the user refers to the latest generated table, data can be omitted and the runtime will use that table context. "
             "Prefer executive-ready visuals that answer the user's exact question quickly, not novelty charts. "
-            "Supported chart types: bar, horizontal_bar, stacked_bar, pie, donut, histogram, scatter, line, area, box, heatmap. "
+            "Supported chart types: bar, horizontal_bar, stacked_bar, lollipop, pie, donut, treemap, histogram, scatter, bubble, line, area, box, heatmap, indicator. "
             "Returns a chart spec that the frontend will render automatically."
         ),
         "input_schema": {
@@ -125,7 +128,7 @@ TOOLS = [
             "properties": {
                 "chart_type": {
                     "type": "string",
-                    "enum": ["bar", "horizontal_bar", "stacked_bar", "pie", "donut", "histogram", "scatter", "line", "area", "box", "heatmap"],
+                    "enum": ["bar", "horizontal_bar", "stacked_bar", "lollipop", "pie", "donut", "treemap", "histogram", "scatter", "bubble", "line", "area", "box", "heatmap", "indicator"],
                     "description": "Type of chart to create",
                 },
                 "data": {
@@ -147,6 +150,10 @@ TOOLS = [
                 "color_column": {
                     "type": "string",
                     "description": "Optional: column to use for color grouping",
+                },
+                "size_column": {
+                    "type": "string",
+                    "description": "Optional: numeric column to use for bubble size when chart_type is bubble",
                 },
                 "question": {
                     "type": "string",
@@ -223,8 +230,8 @@ TOOLS = [
         "description": (
             "Generate a scoped employee-level standard HR report for the signed-in user. "
             "Use this when the user asks for a standard report, employee-level report, name-by-name report, "
-            "headcount roster, active workforce list, or attrition roster. "
-            "Supported report types are active headcount and attrition. "
+            "headcount roster, active workforce list, attrition roster, or a period-based workforce trend report. "
+            "Supported report types include active headcount, attrition, and simulated trend reports. "
             "The source dataset does not contain real employee names, so the report returns an employee label "
             "derived from EmployeeNumber."
         ),
@@ -233,8 +240,20 @@ TOOLS = [
             "properties": {
                 "report_type": {
                     "type": "string",
-                    "enum": ["active_headcount", "attrition"],
+                    "enum": [
+                        "active_headcount",
+                        "attrition",
+                        "workforce_trend",
+                        "headcount_trend",
+                        "attrition_trend",
+                        "promotion_trend",
+                        "tenure_distribution_trend",
+                    ],
                     "description": "Which standard report to generate",
+                },
+                "period_months": {
+                    "type": "integer",
+                    "description": "Optional period length in months for trend reports. Common values are 3, 6, 12, 24, or 36.",
                 },
                 "explanation": {
                     "type": "string",

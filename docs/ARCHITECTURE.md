@@ -2,6 +2,9 @@
 
 This document explains how the HR Insights Platform works end to end. It is written for engineers, architects, and platform owners who need to understand the current design before modifying or deploying the system.
 
+Latest release context:
+- the architecture described here includes the April 16, 2026 trend, export, and workspace expansion wave documented in [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md)
+
 ## 1. System Intent
 
 The platform is designed to answer HR analytics questions in a controlled way. The key design principle is that the system should not behave like a general-purpose chatbot. Instead, it should:
@@ -25,6 +28,7 @@ FastAPI server
   +--> auth session handling
   +--> access profile lookup
   +--> scoped stats and history APIs
+  +--> configured Excel and insight artifact exports
   +--> SSE chat streaming
   |
   v
@@ -33,6 +37,7 @@ HRAgent orchestrator
   +--> question scope validation
   +--> memory retrieval
   +--> context document retrieval
+  +--> direct trend-intent parsing
   +--> prompt construction
   +--> LLM response loop
   |
@@ -49,6 +54,11 @@ Data stores
   - hr_data.db
   - access_control.db
   - context_store.db
+  |
+  +--> artifact builders
+        - configurable Excel workbook
+        - one-page PDF insight brief
+        - PowerPoint export for insight/chart surfaces
 ```
 
 ## 3. Runtime Surfaces
@@ -75,6 +85,9 @@ Primary endpoints:
 - `POST /api/memories/{memory_id}/recall`: recall a saved chat insight without rerunning the original query
 - `POST /api/feedback`: store `Yes` / `No` helpfulness feedback for a saved response
 - `POST /api/reports/export/excel`: regenerate a scoped standard report and download it as an Excel-compatible workbook
+- `POST /api/reports/export/pdf`: generate an insight-oriented one-page PDF brief
+- `POST /api/reports/export/ppt`: generate a PowerPoint artifact for chart or selected-visual surfaces
+- `POST /api/reports/export/excel-config`: export the latest governed table or a standard report with column, filter, sort, and optional trend-period selections
 - `GET /api/context/documents`: list retrieved context docs
 - `POST /api/context/documents`: add context docs
 - `GET /api/stats`: scoped KPI payload
@@ -88,11 +101,14 @@ Responsibilities:
 - authentication shell
 - top-banner LLM connection
 - scoped KPI display
+- scoped KPI display with embedded MoM, YoY, rolling-12, and tenure-mix trend payloads
+- proactive insight tiles and customizable KPI tiles
+- pin, hide, and dismiss preferences for workspace surfaces
 - sidebar history and example prompts
 - cached recall of saved chats
 - clickable topic chips that expand into suggested follow-up questions
 - SSE event consumption
-- tool-call, chart, visual-option, table, markdown, similar-answer, report-export, and feedback rendering
+- tool-call, chart, visual-option, table, markdown, similar-answer, report-export, configured-Excel, insight-PDF, PowerPoint, and feedback rendering
 
 ## 4. Request Lifecycle
 
@@ -113,8 +129,10 @@ Responsibilities:
 5. [agent/orchestrator.py](agent/orchestrator.py) performs:
    - scope validation
    - request routing (`data_query`, `report`, `policy`, `history_lookup`, `visual_follow_up`)
+   - direct trend-intent detection for simple chart-first asks such as MoM or YoY trend prompts
    - in-session conversation history lookup
    - short-follow-up resolution for replies such as `yes` or `job level`
+   - shorthand trend parsing for phrases such as `promo`, `3 year`, `36 month`, or `lab tech`
    - recent and related memory lookup across stored user interactions
    - helpful-answer retrieval from previously upvoted responses
    - context document retrieval
@@ -130,8 +148,11 @@ Responsibilities:
 ### 4.3 Table action policy
 The frontend now treats generated tables differently based on structure:
 - standard reports use a `Download Excel` action
+- standard trend reports preserve `period_months` metadata so exports and configured workbooks can regenerate the same reporting window
 - small aggregate tables can expose `Visual options`
 - larger employee-level or identifier-heavy tables render without a chart CTA
+- one-page PDF export is reserved for insight surfaces rather than generic report tables
+- PowerPoint export is reserved for chart and selected-visual surfaces rather than generic report tables
 
 This avoids encouraging low-value charts for roster-style outputs while keeping guided visualization available for aggregated insights.
 
@@ -175,11 +196,14 @@ Recent additions:
 - preserves the latest generated table for visualization follow-ups
 - emits helpful-memory events when prior upvoted answers match the current question
 - emits report metadata so the frontend can choose between chart exploration and export actions
+- emits trend-period metadata so report tables and exports can preserve period-based reporting windows
+- can build filtered trend series from `employees_monthly_history` and `workforce_monthly_events` for narrower job-role trend asks
 - primes the active session with recalled saved chats so recalled work behaves like live chat context
 - uses stronger memory matching so relevant/history suggestions only surface for close semantic matches
 - stores compact recall summaries alongside full answers for later sidebar recall and UX personalization
 - routes metric-definition and calculation-explanation questions through the governed HR path instead of treating them as out-of-scope chatter
 - promotes the anchored substantive HR question into saved memory when the live user turn is only a shorthand follow-up
+- keeps simple trend-chart asks out of the generic report-builder clarification flow when the intent is clearly a chart
 
 The orchestrator uses `MAX_AGENT_ITERATIONS` from [config.py](../config.py) to limit runaway tool loops.
 
@@ -235,6 +259,7 @@ Important retrieval behavior:
 - relevant-history suggestions require a strong match so the UI does not surface noisy prior chats
 - past chats are retained indefinitely by default unless retention is explicitly enabled through configuration
 - metric-explanation follow-ups inherit the latest meaningful HR anchor so methodology questions stay attached to the original result
+- trend-like requests are derived into a `Workforce trends` topic family so trend analysis can influence personalization and saved-chat recall
 
 ### 8.2 Context document retrieval
 - stores HR policies, schema notes, and metric definitions
@@ -254,7 +279,13 @@ The prompt builder in [agent/prompts.py](agent/prompts.py) merges:
 ## 9. Data Layer
 
 ### 9.1 `hr_data.db`
-Primary analytics database used by [database/connector.py](database/connector.py). It contains the `employees` table loaded from the IBM HR dataset.
+Primary analytics database used by [database/connector.py](database/connector.py).
+
+It now contains two governed layers:
+- current snapshot tables: `employees`, `employees_current`
+- simulated trend tables: `employees_monthly_history`, `employees_trend_current`, `workforce_monthly_events`, `workforce_monthly_summary`, `workforce_trend_latest_summary`
+
+The simulated trend layer is generated from the base snapshot through [database/workforce_history.py](../database/workforce_history.py) and is intended for month-over-month and year-over-year exploration when a real event-history feed is not available.
 
 ### 9.2 `access_control.db`
 SQLite store mapping user emails to access profiles. It is currently seeded with demo identities for Microsoft, Google, and Okta sign-ins.
@@ -292,6 +323,9 @@ Current tools:
 
 Important design choice:
 - tools return structured JSON whenever possible so the UI can render tables and charts without guessing
+- trend analysis uses the same tool path as other SQL work, but the prompt now instructs the model to label results from the simulated monthly tables as simulated
+- visualization recommendation now includes richer candidates such as lollipop, treemap, bubble, and indicator views when the question fits them
+- export artifacts are composed server-side through `utils/report_artifacts.py` so PDF, PowerPoint, and configured Excel outputs share one story-building contract
 
 ## 11. UI State And Session Model
 
@@ -302,6 +336,8 @@ Important design choice:
 - tool-call visibility preference
 - sidebar collapse state
 - active favorite-topic filter
+- customizable workspace tile preferences
+- hidden or shown state for the in-chat insight strip
 
 ### Server session state
 [server.py](server.py) stores:
@@ -335,6 +371,8 @@ The most important boundaries in the system are:
 - clear place to attach real access-control sources
 - deterministic tool interfaces
 - useful path for internal HR reporting with controlled access
+- one shared trend contract now feeds stats, reports, exports, personalization, and direct trend-chart flows
+- export artifacts are governed by the same role, scope, and current-session context rules as the rest of the product
 
 ## 14. Current Gaps For A Bank Deployment
 
@@ -345,6 +383,7 @@ The following items should be treated as implementation gaps rather than documen
 - sessions are in-memory rather than centralized
 - SQLite is convenient but not the likely final persistence choice for enterprise usage
 - automated tests are still limited
+- the trend history is simulated rather than sourced from a real HRIS event timeline
 
 ## 15. Recommended Next Architecture Steps
 
@@ -355,3 +394,4 @@ For a bank-internal deployment, the next architectural milestones should be:
 4. Move conversational memory and context documents to managed persistence.
 5. Restrict CORS and enforce TLS.
 6. Add audit logging for access decisions, SQL execution, and report generation.
+7. Replace the simulated trend layer with a governed real historical feed when one becomes available.

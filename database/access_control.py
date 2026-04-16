@@ -15,6 +15,7 @@ HR_SCOPE_KEYWORDS = {
     "performance", "rating", "workforce", "manager", "team", "department", "hiring",
     "recruiting", "satisfaction", "engagement", "policy", "benefits", "leave", "overtime",
     "attriting", "attrited", "gender", "demographic", "women", "woman", "female", "male",
+    "trend", "trends", "mom", "month over month", "yoy", "year over year", "rolling 12",
 }
 
 ACCESS_CAPABILITY_PHRASES = (
@@ -58,7 +59,7 @@ METRIC_KEYWORDS = {
     "compensation": {"salary", "compensation", "income", "pay", "bonus", "hike"},
     "performance": {"performance", "rating", "review"},
     "satisfaction": {"satisfaction", "engagement", "work-life", "environment", "relationship"},
-    "tenure": {"tenure", "years", "promotion", "experience", "working years"},
+    "tenure": {"tenure", "years", "promotion", "promote", "promoted", "promo", "experience", "working years"},
     "demographics": {"gender", "age", "marital", "demographic", "education", "women", "woman", "men", "man", "female", "male"},
     "policy": {"policy", "policies", "benefits", "leave", "pto", "compliance", "handbook"},
 }

@@ -15,6 +15,7 @@ logger = logging.getLogger("hr_platform.context")
 
 TOPIC_LABELS = {
     "headcount": "Headcount",
+    "trend": "Workforce trends",
     "attrition": "Attrition rate",
     "compensation": "Compensation bands",
     "performance": "Performance ratings",
@@ -125,6 +126,15 @@ MEMORY_MATCH_STOPWORDS = {
     "summary",
     "summarize",
 }
+TREND_HINT_PATTERNS = (
+    re.compile(r"\btrend\b", re.IGNORECASE),
+    re.compile(r"\btrends\b", re.IGNORECASE),
+    re.compile(r"\bmom\b", re.IGNORECASE),
+    re.compile(r"\byoy\b", re.IGNORECASE),
+    re.compile(r"\bmonth over month\b", re.IGNORECASE),
+    re.compile(r"\byear over year\b", re.IGNORECASE),
+    re.compile(r"\brolling\s*12\b", re.IGNORECASE),
+)
 
 
 def _utc_now() -> str:
@@ -218,6 +228,20 @@ def _history_metrics(question: str, response: str = "", insight_summary: str = "
             return response_summary_metrics
 
     return _extract_metrics(str(response or ""))
+
+
+def _looks_like_trend_history(*texts: str) -> bool:
+    haystack = " ".join(str(text or "") for text in texts if str(text or "").strip())
+    if not haystack:
+        return False
+    return any(pattern.search(haystack) for pattern in TREND_HINT_PATTERNS)
+
+
+def _history_topics(question: str, response: str = "", insight_summary: str = "") -> set[str]:
+    topics = set(_history_metrics(question, response, insight_summary))
+    if _looks_like_trend_history(question, response, insight_summary):
+        topics.add("trend")
+    return topics
 
 
 def _is_featureable_history_question(question: str) -> bool:
@@ -504,6 +528,16 @@ class ContextStore:
                 "tags": ["hr", "metrics", "calculations", "promotion", "policy"],
             },
             {
+                "title": "Simulated Trend Layer Definitions",
+                "content": (
+                    "The monthly trend layer is simulated from the current workforce baseline rather than sourced from a real HRIS time-series feed. "
+                    "Month-over-month metrics compare the latest monthly value to the immediately prior month. "
+                    "Year-over-year metrics compare the latest monthly value to the same month one year earlier. "
+                    "Rolling 12-month rates use the trailing 12 months of simulated hires, exits, or promotions divided by the average active headcount across the same trailing window."
+                ),
+                "tags": ["hr", "metrics", "calculations", "trend", "policy"],
+            },
+            {
                 "title": "Supported HR Insights Questions",
                 "content": (
                     "Users can ask what HR data they can access, which metric domains are approved for their role, "
@@ -661,6 +695,7 @@ class ContextStore:
                 continue
 
             inferred_metrics = _history_metrics(question, response, insight_summary)
+            inferred_topics = _history_topics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -674,7 +709,7 @@ class ContextStore:
                     "question": question,
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
-                    "topics": _topic_labels(inferred_metrics),
+                    "topics": _topic_labels(inferred_topics),
                     "insight_summary": insight_summary,
                 }
             )
@@ -700,6 +735,7 @@ class ContextStore:
                 continue
 
             inferred_metrics = _history_metrics(question, response, insight_summary)
+            inferred_topics = _history_topics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -709,7 +745,7 @@ class ContextStore:
                     "question": question,
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
-                    "topics": _topic_labels(inferred_metrics),
+                    "topics": _topic_labels(inferred_topics),
                     "insight_summary": insight_summary,
                 }
             )
@@ -832,6 +868,7 @@ class ContextStore:
             response = item.get("response", "")
             insight_summary = str(item.get("insight_summary") or "").strip()
             inferred_metrics = _history_metrics(question, response, insight_summary)
+            inferred_topics = _history_topics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -845,7 +882,7 @@ class ContextStore:
                     "question": question,
                     "created_at": item.get("created_at"),
                     "feedback_score": item.get("feedback_score", 0),
-                    "topics": _topic_labels(inferred_metrics),
+                    "topics": _topic_labels(inferred_topics),
                     "insight_summary": insight_summary,
                 }
             )
@@ -881,6 +918,7 @@ class ContextStore:
             feedback_score = int(row["feedback_score"] or 0)
             insight_summary = _row_insight_summary(row)
             inferred_metrics = _history_metrics(question, response, insight_summary)
+            inferred_topics = _history_topics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 continue
 
@@ -891,7 +929,7 @@ class ContextStore:
             elif feedback_score < 0:
                 score = max(0.1, score + (0.35 * feedback_score))
 
-            for metric in inferred_metrics:
+            for metric in inferred_topics:
                 topic_scores[metric] = topic_scores.get(metric, 0.0) + score
 
             normalized_question = question.strip().lower()
@@ -908,7 +946,7 @@ class ContextStore:
                             "question": question,
                             "created_at": row["created_at"],
                             "feedback_score": feedback_score,
-                            "topics": _topic_labels(inferred_metrics),
+                            "topics": _topic_labels(inferred_topics),
                             "insight_summary": insight_summary,
                             "reuse_count": 1,
                         },
@@ -985,6 +1023,7 @@ class ContextStore:
             response = str(row["response"] or "").strip()
             insight_summary = _row_insight_summary(row)
             inferred_metrics = _history_metrics(question, response, insight_summary)
+            inferred_topics = _history_topics(question, response, insight_summary)
             if not _is_metric_scope_allowed(inferred_metrics, allowed_metrics):
                 return None
 
@@ -1005,7 +1044,7 @@ class ContextStore:
             "response": response,
             "created_at": row["created_at"],
             "feedback_score": int(row["feedback_score"] or 0),
-            "topics": _topic_labels(inferred_metrics),
+            "topics": _topic_labels(inferred_topics),
             "insight_summary": insight_summary,
         }
 

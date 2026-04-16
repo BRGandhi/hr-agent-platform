@@ -2,6 +2,9 @@
 
 This guide is for someone who is new to the repository and wants to clone it, run it locally, and then move it onto a server for internal use.
 
+Latest release context:
+- this guide includes the simulated trend layer, configurable export workbench, proactive workspace tiles, and insight artifact flows added in the April 16, 2026 release wave documented in [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md)
+
 The intended audience includes:
 - engineers onboarding to the project
 - platform teams deploying internal tools
@@ -15,8 +18,10 @@ When you run this repo, you are standing up:
 - a FastAPI backend that streams results over SSE
 - a governed tool-using agent
 - an approved HR analytics dataset
+- a simulated 36-month workforce history layer for trend analysis
 - an access-control store linked to the authenticated user email
 - a memory/context store for prior questions and policy documents
+- a governed artifact layer for configured Excel workbooks, one-page PDF briefs, and PowerPoint export on chart or insight surfaces
 
 Important: this repo already contains production-oriented patterns, but it still includes demo-grade defaults. Treat it as a strong internal prototype or reference implementation, not a completed bank-hardened product.
 
@@ -42,11 +47,16 @@ At a minimum, understand these files before modifying the platform:
 - [database/access_control.py](database/access_control.py)
 - [database/context_store.py](database/context_store.py)
 - [database/schema.py](database/schema.py)
+- [database/workforce_history.py](database/workforce_history.py)
 
 ### Frontend
 - [static/index.html](static/index.html)
 - [static/app.js](static/app.js)
 - [static/style.css](static/style.css)
+
+### Utilities
+- [utils/build_workforce_history.py](utils/build_workforce_history.py)
+- [utils/report_artifacts.py](utils/report_artifacts.py)
 
 ## 3. System Requirements
 
@@ -65,6 +75,9 @@ Python dependencies are declared in [requirements.txt](requirements.txt):
 - `pandas`
 - `plotly`
 - `python-dotenv`
+- `Pillow`
+- `python-pptx`
+- `XlsxWriter`
 
 ## 4. Clone And Install
 
@@ -139,6 +152,8 @@ DEV_SSO_ENABLED=true
 - API keys can be entered either in `.env` or in the Connect LLM modal.
 - Generated aggregate tables can be turned into visuals either by asking the agent in a follow-up prompt or by using the table-level `Visual options` action in the UI.
 - Standard reports now prefer a `Download Excel` action instead of offering a visualization CTA.
+- The one-page PDF brief is meant for insight surfaces, not plain report tables.
+- PowerPoint export is meant for chart and selected-visual surfaces, not plain report tables.
 
 ## 6. Prepare The HR Dataset
 
@@ -153,6 +168,13 @@ python setup_db.py
 That rebuilds:
 - `hr_data.db`
 - the `employees` table with the HR analytics dataset
+- the simulated monthly trend layer through [database/workforce_history.py](database/workforce_history.py)
+
+If you only want to refresh the simulated monthly history without rebuilding the base snapshot:
+
+```bash
+python utils/build_workforce_history.py
+```
 
 The first application run will also create:
 - `access_control.db`
@@ -183,9 +205,12 @@ After starting the server, validate the following:
 
 ### 8.3 Role-filtered UI
 - top KPI cards reflect the signed-in business coverage
+- proactive insight tiles reflect the signed-in role, saved history, and latest scoped trend data
 - example prompts change based on access
 - topic chips under the welcome state expand into related sample questions when clicked
 - previous questions appear in the sidebar after asking a question
+- the `While You Chat` strip can be dismissed and restored
+- the workspace tile customizer allows pinning and hiding KPI and insight tiles
 
 ### 8.4 Response and memory UX
 - assistant answers show `Yes` / `No` helpfulness controls
@@ -193,8 +218,22 @@ After starting the server, validate the following:
 - asking a similar question later can surface a previously upvoted answer as a helpful example
 - standard reports should show a `Download Excel` action
 - `Visual options` should only appear on smaller aggregate tables, not on employee-level roster outputs
+- chart or selected-visual surfaces can show `PowerPoint`
+- insight-driven surfaces can show a one-page PDF brief
+- `Configure Excel` should allow column, sort, filter, row-limit, summary-sheet, and period-based selections when appropriate
 
-### 8.5 Chat safety behavior
+### 8.5 Trend validation
+Try these prompts:
+- `Show me a mom trend of attrition`
+- `Generate a promotion trend report for Business Units for the last 12 months`
+- `Show this 3 year promo trend for only lab tech`
+
+Expected behavior:
+- the first prompt should route directly to a chart rather than a report-builder clarification
+- the second prompt should preserve a time window into report export actions
+- the third prompt should resolve to `Laboratory Technician` and a 36-month promotion trend rather than falling back to a headcount chart
+
+### 8.6 Chat safety behavior
 Try these prompts:
 - `What is the attrition rate for Business Units?`
 - `Generate an active headcount report for Business Units`
@@ -263,6 +302,15 @@ Only rebuild it if you are intentionally replacing the demo dataset:
 source .venv/bin/activate
 python setup_db.py
 ```
+
+If a code pull updates only the simulated trend logic and not the base snapshot itself:
+
+```bash
+source .venv/bin/activate
+python utils/build_workforce_history.py
+```
+
+After any upgrade that changes backend routes, restart the running `uvicorn` process before validating the UI. Several local issues during this release wave were caused by the browser loading new assets while an old backend process was still serving stale routes and stale `/api/stats` payloads.
 
 ### 10.4 Start with Uvicorn
 
@@ -366,6 +414,22 @@ Replace [database/access_control.py](database/access_control.py) with a connecto
 3. Update [agent/prompts.py](agent/prompts.py)
 4. Verify the web UI renders the resulting event type correctly
 
+### Add or change a governed export artifact
+1. Update the request model or endpoint behavior in [server.py](server.py)
+2. Implement or revise the story-building logic in [utils/report_artifacts.py](utils/report_artifacts.py)
+3. Update the relevant client action in [static/app.js](static/app.js)
+4. Re-check the workflow policy:
+   - Excel for report tables
+   - PDF one-pagers for insight surfaces
+   - PowerPoint for chart or selected-visual surfaces
+
+### Extend the simulated trend layer
+1. Update [database/workforce_history.py](database/workforce_history.py)
+2. Refresh the data with [utils/build_workforce_history.py](utils/build_workforce_history.py) or [setup_db.py](setup_db.py)
+3. Update [database/connector.py](database/connector.py) and [database/schema.py](database/schema.py)
+4. Update [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+5. Run the trend-focused regression tests
+
 ### Change prompt behavior
 Update [agent/prompts.py](agent/prompts.py).
 
@@ -384,3 +448,4 @@ If you are coming fresh to the project, do these in order:
 4. Read [database/access_control.py](database/access_control.py) and [database/context_store.py](database/context_store.py).
 5. Trace a single request through [server.py](server.py), [agent/orchestrator.py](agent/orchestrator.py), and [agent/tool_executor.py](agent/tool_executor.py).
 6. Review [docs/RUNBOOK.md](docs/RUNBOOK.md) to understand operational expectations.
+7. Read [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md) before changing trend, export, or personalization behavior.
