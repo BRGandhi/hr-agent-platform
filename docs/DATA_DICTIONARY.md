@@ -10,10 +10,15 @@ Together, they provide:
 - authorization and scoping data
 - memory and contextual reference data
 
+Latest release context:
+- this dictionary includes the simulated monthly workforce history, trend-summary views, and derived trend-tag behavior introduced in the April 16, 2026 release wave documented in [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md)
+
 ## 1. Logical Data Model
 
 ### 1.1 `hr_data.db`
-Primary analytics database containing the `employees` table.
+Primary analytics database containing:
+- current snapshot tables: `employees`, `employees_current`
+- simulated trend tables: `employees_monthly_history`, `employees_trend_current`, `workforce_monthly_events`, `workforce_monthly_summary`, `workforce_trend_latest_summary`
 
 ### 1.2 `access_control.db`
 Authorization database mapping signed-in users to role and scope.
@@ -32,12 +37,27 @@ The platform uses the IBM HR Analytics Employee Attrition & Performance dataset 
 Source:
 - https://www.kaggle.com/datasets/pavansubhasht/ibm-hr-analytics-attrition-dataset
 
-Expected runtime table:
+Expected runtime tables:
 - `employees`
+- `employees_current`
+- `employees_monthly_history`
+- `employees_trend_current`
+- `workforce_monthly_events`
+- `workforce_monthly_summary`
+- `workforce_trend_latest_summary`
 
 ### 2.1 Row and column counts
-- rows: 1,470
-- columns: 35
+
+Current snapshot layer:
+- `employees`: 1,470 rows, 35 columns
+- `employees_current`: compatibility view over `employees`
+
+Simulated trend layer:
+- `employees_monthly_history`: 42,097 rows
+- `employees_trend_current`: 1,233 rows in the latest simulated snapshot
+- `workforce_monthly_events`: 2,550 rows
+- `workforce_monthly_summary`: 144 rows
+- `workforce_trend_latest_summary`: 4 rows in the latest simulated summary view
 
 ### 2.2 Column reference
 
@@ -84,8 +104,117 @@ Expected runtime table:
 - `EmployeeNumber` is the only stable employee-level identifier in the demo dataset.
 - The dataset does not include real employee names.
 - Standard reports therefore use employee labels derived from `EmployeeNumber`.
+- The monthly trend tables are simulated from the base snapshot and should be described as simulated when used in analysis.
 
-### 2.4 Current report-friendly columns
+### 2.4 Simulated monthly roster table: `employees_monthly_history`
+
+Purpose:
+- one row per active employee per simulated month
+- supports filtered trend work by department, role, level, overtime, tenure, and promotion recency
+- acts as the detailed source for filtered trend charts when the user asks for a narrower cut than the aggregate summary table can provide
+
+Important columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `SnapshotMonth` | Text | First day of the simulated month in `YYYY-MM-DD` format |
+| `SnapshotYear` | Integer | Numeric calendar year |
+| `SnapshotMonthNumber` | Integer | Numeric month |
+| `SnapshotQuarter` | Integer | Quarter of year |
+| `EmployeeNumber` | Integer | Simulated employee identifier present in that month |
+| `SourceEmployeeNumber` | Integer | Base-snapshot employee used as the modeling anchor |
+| `SyntheticEmployee` | Integer | `1` when the employee was synthetically created during simulation |
+| `IsLatestSnapshot` | Integer | `1` for the latest simulated month |
+| `HireDate` | Text | Simulated hire date |
+| `HireThisMonth` | Integer | `1` if the employee was hired in that month |
+| `PromotedThisMonth` | Integer | `1` if the employee was promoted in that month |
+| `Department` | Text | Department in that month |
+| `JobRole` | Text | Job role in that month |
+| `JobLevel` | Integer | Job level in that month |
+| `MonthlyIncome` | Real | Simulated monthly income |
+| `OverTime` | Text | `Yes` or `No` |
+| `YearsAtCompany` | Real | Simulated tenure at company in years |
+| `YearsInCurrentRole` | Real | Simulated tenure in current role in years |
+| `YearsSinceLastPromotion` | Real | Simulated years since last promotion |
+| `YearsWithCurrManager` | Real | Simulated years with current manager |
+| `TenureBand` | Text | Derived tenure band: `0-1`, `2-4`, `5-9`, or `10+` |
+
+### 2.5 Simulated monthly event table: `workforce_monthly_events`
+
+Purpose:
+- one row per hire, exit, or promotion event
+- supports event-level monthly analysis when the question is specifically about workforce movement rather than roster state
+
+Important columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `SnapshotMonth` | Text | Month in which the event occurred |
+| `SnapshotYear` | Integer | Calendar year |
+| `SnapshotMonthNumber` | Integer | Calendar month |
+| `EmployeeNumber` | Integer | Employee tied to the event |
+| `SourceEmployeeNumber` | Integer | Base employee anchor |
+| `SyntheticEmployee` | Integer | Indicates whether the employee is synthetic |
+| `Department` | Text | Department at time of event |
+| `JobRole` | Text | Role at time of event |
+| `JobLevel` | Integer | Level at time of event |
+| `EventType` | Text | `hire`, `exit`, or `promotion` |
+| `TenureAtEventYears` | Real | Tenure at time of event |
+| `YearsSinceLastPromotion` | Real | Simulated years since prior promotion |
+| `MonthlyIncome` | Real | Monthly income at event time |
+| `OverTime` | Text | Overtime flag at event time |
+
+### 2.6 Simulated monthly summary table: `workforce_monthly_summary`
+
+Purpose:
+- monthly KPI summary for both enterprise (`Department='All'`) and department rows
+- main source for MoM, YoY, rolling-12, and tenure-mix trend reporting
+
+Important columns:
+
+| Column | Type | Description |
+|---|---|---|
+| `SnapshotMonth` | Text | Month represented by the row |
+| `Department` | Text | `All` for enterprise or a department name |
+| `Headcount` | Integer | End-of-month headcount |
+| `StartOfMonthHeadcount` | Integer | Start-of-month headcount |
+| `HiresThisMonth` | Integer | Monthly hire count |
+| `ExitsThisMonth` | Integer | Monthly exit count |
+| `PromotionsThisMonth` | Integer | Monthly promotion count |
+| `NetChangeThisMonth` | Integer | Hires minus exits |
+| `MonthlyHiringRatePct` | Real | Hires as a share of start-of-month headcount |
+| `MonthlyAttritionRatePct` | Real | Exits as a share of start-of-month headcount |
+| `MonthlyPromotionRatePct` | Real | Promotions as a share of start-of-month headcount |
+| `AverageYearsAtCompany` | Real | Average simulated tenure |
+| `AverageYearsSinceLastPromotion` | Real | Average simulated years since last promotion |
+| `AverageMonthlyIncome` | Real | Average simulated monthly income |
+| `OverTimeSharePct` | Real | Share of employees marked overtime |
+| `TenureBand0To1Pct` | Real | Share of employees in `0-1` years at company |
+| `TenureBand2To4Pct` | Real | Share of employees in `2-4` years at company |
+| `TenureBand5To9Pct` | Real | Share of employees in `5-9` years at company |
+| `TenureBand10PlusPct` | Real | Share of employees in `10+` years at company |
+| `MoMHeadcountChange` | Integer | Numeric month-over-month headcount delta |
+| `MoMHeadcountChangePct` | Real | Percentage month-over-month headcount delta |
+| `Rolling12Hires` | Integer | Rolling 12-month hires |
+| `Rolling12Exits` | Integer | Rolling 12-month exits |
+| `Rolling12Promotions` | Integer | Rolling 12-month promotions |
+| `Rolling12HiringRatePct` | Real | Rolling 12-month hiring rate |
+| `Rolling12AttritionRatePct` | Real | Rolling 12-month attrition rate |
+| `Rolling12PromotionRatePct` | Real | Rolling 12-month promotion rate |
+| `YoYHeadcountChange` | Integer | Numeric year-over-year headcount delta |
+| `YoYHeadcountChangePct` | Real | Percentage year-over-year headcount delta |
+
+### 2.7 Simulated trend views
+
+`employees_trend_current`
+- latest simulated monthly active roster only
+- useful for current-state views that should align to the trend layer rather than the original snapshot
+
+`workforce_trend_latest_summary`
+- latest simulated monthly summary rows only
+- useful for current top-line trend metrics and the scoped `trend_summary` payload in `/api/stats`
+
+### 2.8 Current report-friendly columns
 The built-in standard reports intentionally use a conservative employee-level subset:
 - `EmployeeNumber`
 - `Department`
@@ -97,7 +226,7 @@ The built-in standard reports intentionally use a conservative employee-level su
 
 This keeps reports compatible with restricted roles that only have access to headcount and attrition data.
 
-### 2.5 Constant columns
+### 2.9 Constant columns
 The following columns should generally be ignored for analysis:
 - `EmployeeCount`
 - `Over18`
@@ -186,6 +315,12 @@ Current retrieval patterns built on top of this table:
 - `past_questions_for_sidebar`: broader cross-session history list
 - `get_memory`: direct recall lookup for a saved prior chat
 
+Current storage and personalization semantics:
+- if a live turn is only a thin follow-up such as `yes`, `show me`, or `answer question 1`, the saved `question` may be promoted to the anchored substantive HR question instead
+- favorite-chat ranking aggregates reuse count across repeated asks of the same question
+- featured-history and center-board prompt surfaces intentionally filter thin shorthand follow-ups so the UI emphasizes the real business question
+- topic labels such as `Headcount`, `Attrition rate`, `Tenure mix`, and `Workforce trends` are derived at retrieval time rather than stored as explicit database columns
+
 ### 4.2 Table: `context_documents`
 
 | Column | Type | Description |
@@ -210,6 +345,7 @@ The repo seeds documents such as:
 - HR Analytics Scope Policy
 - HR Data Access Policy
 - Metric Definitions
+- HR Snapshot Calculation Definitions
 - Database Schema Summary
 
 ## 5. Derived Metrics Used By The Platform
@@ -219,12 +355,38 @@ The app currently surfaces or calculates:
 - `attrited_employees`
 - `active_employees`
 - `attrition_rate_pct`
+- `promoted_last_year_employees`
+- department-level `promotion_rate`
+- `headcount_mom_change_pct`
+- `headcount_yoy_change_pct`
+- `monthly_headcount_change`
+- `monthly_hiring_rate_pct`
+- `monthly_attrition_rate_pct`
+- `monthly_promotion_rate_pct`
+- `rolling12_hiring_rate_pct`
+- `rolling12_attrition_rate_pct`
+- `rolling12_promotion_rate_pct`
+- `avg_years_at_company`
+- `overtime_share_pct`
+- `tenure_distribution_pct`
 
 Definitions:
 - `total_employees`: total employees in scope
 - `attrited_employees`: employees with `Attrition='Yes'` in scope
 - `active_employees`: total employees minus attrited employees in scope
 - `attrition_rate_pct`: attrited employees divided by total employees times 100
+- `promoted_last_year_employees`: employees where `YearsSinceLastPromotion < 1`
+- `promotion_rate`: recently promoted employees divided by total headcount in the same slice, multiplied by 100
+
+Snapshot calculation caveat:
+- promotion metrics in this demo are current-snapshot calculations, not rolling time-series measures
+
+Trend calculation caveat:
+- the trend metrics above come from the simulated monthly layer and should be labeled as simulated when used in analysis or export workflows
+
+Trend integration note:
+- these trend metrics are now part of the runtime product contract, not just ad hoc chart fields
+- `/api/stats`, proactive tiles, report exports, configured Excel workbooks, and saved memory topic tagging all use the same trend vocabulary
 
 ## 6. Access-Controlled Data Domains
 

@@ -57,6 +57,15 @@ from config import (
 from database.access_control import AccessControlStore, AccessDeniedError
 from database.connector import HRDatabase
 from database.context_store import ContextStore
+from utils.report_artifacts import (
+    attach_story_chart,
+    build_configured_excel,
+    build_pdf_report,
+    build_ppt_report,
+    build_report_story,
+    configure_export_rows,
+    sanitize_filename,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -250,6 +259,27 @@ class FeedbackRequest(BaseModel):
 class ReportExportRequest(BaseModel):
     report_type: str
     title: str = ""
+    period_months: int | None = None
+
+
+class ArtifactExportRequest(BaseModel):
+    title: str = ""
+    report_type: str = ""
+    period_months: int | None = None
+    session_id: str = ""
+    rows: list[dict] = Field(default_factory=list)
+    question: str = ""
+    chart_spec: dict = Field(default_factory=dict)
+
+
+class ExcelConfigExportRequest(ArtifactExportRequest):
+    columns: list[str] = Field(default_factory=list)
+    sort_by: str = ""
+    sort_direction: str = "asc"
+    max_rows: int | None = None
+    include_summary: bool = True
+    filter_column: str = ""
+    filter_value: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +466,68 @@ def _build_excel_xml(title: str, rows: list[dict]) -> str:
 </Workbook>"""
 
 
+def _resolve_export_payload(
+    report_type: str,
+    period_months: int | None,
+    title: str,
+    session_id: str,
+    rows: list[dict],
+    profile,
+) -> tuple[str, list[dict]]:
+    provided_rows = rows or []
+    if provided_rows:
+        resolved_title = str(title or "HR Export").strip() or "HR Export"
+        return resolved_title, provided_rows
+
+    normalized_session_id = str(session_id or "").strip()
+    if normalized_session_id:
+        session = _sessions.get(normalized_session_id)
+        if session and session.agent.last_table_context and session.agent.last_table_context.get("rows"):
+            session.last_accessed = _now()
+            table_title = str(session.agent.last_table_context.get("title") or title or "Latest Table").strip() or "Latest Table"
+            table_rows = list(session.agent.last_table_context.get("rows") or [])
+            if table_rows:
+                return table_title, table_rows
+
+    normalized_report_type = str(report_type or "").strip().lower()
+    if not normalized_report_type:
+        raise HTTPException(status_code=400, detail="Provide table rows or a supported report type.")
+
+    executor = ToolExecutor(DB, context_store=CONTEXT_STORE)
+    raw_result = executor.execute(
+        "generate_standard_report",
+        {"report_type": normalized_report_type, "period_months": period_months, "explanation": ""},
+        access_profile=profile,
+    )
+    try:
+        payload = json.loads(raw_result)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="Could not prepare the export payload.") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Export returned an unexpected payload.")
+    if payload.get("error"):
+        raise HTTPException(status_code=400, detail=str(payload["error"]))
+
+    resolved_title = (payload.get("report_name") or title or "HR Report").strip()
+    resolved_rows = payload.get("results") or []
+    return resolved_title, resolved_rows
+
+
+def _build_story_from_request(req: ArtifactExportRequest, profile) -> tuple[str, list[dict], object]:
+    title, rows = _resolve_export_payload(req.report_type, req.period_months, req.title, req.session_id, req.rows, profile)
+    story = build_report_story(
+        title,
+        rows,
+        role=profile.role,
+        scope_name=profile.scope_name,
+        question=req.question,
+        chart_spec=req.chart_spec,
+    )
+    story = attach_story_chart(story, rows)
+    return title, rows, story
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -613,7 +705,7 @@ def export_report_excel(req: ReportExportRequest, request: Request):
     executor = ToolExecutor(DB, context_store=CONTEXT_STORE)
     raw_result = executor.execute(
         "generate_standard_report",
-        {"report_type": req.report_type.strip().lower(), "explanation": ""},
+        {"report_type": req.report_type.strip().lower(), "period_months": req.period_months, "explanation": ""},
         access_profile=profile,
     )
 
@@ -636,6 +728,67 @@ def export_report_excel(req: ReportExportRequest, request: Request):
         content=workbook.encode("utf-8"),
         media_type="application/vnd.ms-excel",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/reports/export/pdf")
+def export_insight_pdf(req: ArtifactExportRequest, request: Request):
+    profile = _current_access_profile(request)
+    title, _, story = _build_story_from_request(req, profile)
+    artifact = build_pdf_report(story)
+    filename = sanitize_filename(title, "pdf")
+    return Response(
+        content=artifact,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/reports/export/ppt")
+def export_insight_ppt(req: ArtifactExportRequest, request: Request):
+    profile = _current_access_profile(request)
+    title, _, story = _build_story_from_request(req, profile)
+    artifact = build_ppt_report(story)
+    filename = sanitize_filename(title, "pptx")
+    return Response(
+        content=artifact,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/reports/export/excel-config")
+def export_configured_excel(req: ExcelConfigExportRequest, request: Request):
+    profile = _current_access_profile(request)
+    title, rows = _resolve_export_payload(req.report_type, req.period_months, req.title, req.session_id, req.rows, profile)
+    configured_rows = configure_export_rows(
+        rows,
+        columns=req.columns,
+        sort_by=req.sort_by,
+        sort_direction=req.sort_direction,
+        max_rows=req.max_rows,
+        filter_column=req.filter_column,
+        filter_value=req.filter_value,
+    )
+    artifact = build_configured_excel(
+        title,
+        rows,
+        columns=req.columns,
+        sort_by=req.sort_by,
+        sort_direction=req.sort_direction,
+        max_rows=req.max_rows,
+        include_summary=req.include_summary,
+        filter_column=req.filter_column,
+        filter_value=req.filter_value,
+    )
+    filename = sanitize_filename(title, "xlsx")
+    return Response(
+        content=artifact,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Export-Row-Count": str(len(configured_rows)),
+        },
     )
 
 

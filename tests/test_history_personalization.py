@@ -171,6 +171,78 @@ class ContextStorePersonalizationTests(unittest.TestCase):
 
         self.assertEqual(summary["favorite_questions"][0]["topics"], ["Demographic mix"])
 
+    def test_history_summary_favorite_questions_reward_reuse_without_duplicate_rows(self):
+        self.store.remember(
+            self.user_email,
+            "What is the headcount for Business Units?",
+            "The scoped headcount is 1,470 employees.",
+        )
+        self.store.remember(
+            self.user_email,
+            "What is the attrition rate for Business Units?",
+            "The attrition rate is 16.1%.",
+        )
+        self.store.remember(
+            self.user_email,
+            "What is the headcount for Business Units?",
+            "The scoped headcount is 1,470 employees.",
+        )
+
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        favorite_questions = summary["favorite_questions"]
+        self.assertEqual(favorite_questions[0]["question"], "What is the headcount for Business Units?")
+        self.assertEqual(favorite_questions[0]["reuse_count"], 2)
+        self.assertEqual(
+            sum(1 for item in favorite_questions if item["question"] == "What is the headcount for Business Units?"),
+            1,
+        )
+
+    def test_history_summary_favorite_questions_reward_helpful_feedback(self):
+        helpful_memory_id = self.store.remember(
+            self.user_email,
+            "What is the attrition rate for Business Units?",
+            "The attrition rate is 16.1%.",
+        )
+        self.store.remember(
+            self.user_email,
+            "What is the headcount for Business Units?",
+            "The scoped headcount is 1,470 employees.",
+        )
+        self.store.record_feedback(self.user_email, helpful_memory_id, "yes")
+
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        self.assertEqual(summary["favorite_questions"][0]["question"], "What is the attrition rate for Business Units?")
+        self.assertEqual(summary["favorite_questions"][0]["feedback_score"], 1)
+
+    def test_history_summary_skips_thin_follow_up_prompts_in_featured_questions(self):
+        self.store.remember(
+            self.user_email,
+            "Which teams in Business Units have the highest attrition risk?",
+            "Sales and Human Resources have the highest attrition risk.",
+        )
+        self.store.remember(
+            self.user_email,
+            "answer question 1",
+            "Sales and Human Resources have the highest attrition risk.",
+        )
+
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["attrition", "headcount"],
+        )
+
+        favorite_questions = [item["question"] for item in summary["favorite_questions"]]
+        self.assertIn("Which teams in Business Units have the highest attrition risk?", favorite_questions)
+        self.assertNotIn("answer question 1", favorite_questions)
+
     def test_sidebar_topics_match_plural_question_terms_before_summary_fallback(self):
         self.store.remember(
             self.user_email,
@@ -273,6 +345,27 @@ class ContextStorePersonalizationTests(unittest.TestCase):
         self.assertIn("The current headcount for Business Units is 1,470 employees.", memory["insight_summary"])
         self.assertNotIn("Can you break headcount down by department", memory["insight_summary"])
         self.assertNotIn("Which employee job roles have the highest headcount", memory["insight_summary"])
+
+    def test_trend_requests_are_tagged_as_workforce_trends(self):
+        self.store.remember(
+            self.user_email,
+            "Show month over month headcount trend for Business Units over the last 12 months",
+            "The simulated active workforce trend is up 3.8% year over year and down 0.2% month over month.",
+        )
+
+        results = self.store.past_questions_for_sidebar(
+            self.user_email,
+            limit=10,
+            allowed_metrics=["headcount", "attrition"],
+        )
+        summary = self.store.history_summary(
+            self.user_email,
+            allowed_metrics=["headcount", "attrition"],
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("Workforce trends", results[0]["topics"])
+        self.assertTrue(any(item["topic"] == "Workforce trends" for item in summary["favorite_topics"]))
 
 
 if __name__ == "__main__":

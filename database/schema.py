@@ -1,66 +1,112 @@
 HR_SCHEMA = """
-The HR database contains the original IBM HR attrition dataset only.
+The HR database contains two governed data layers:
 
-Use:
-- `employees` for the original snapshot data
-- `employees_current` as a compatibility view over the same rows
+1. Current snapshot layer
+- `employees`
+- `employees_current`
+
+2. Simulated historical trend layer
+- `employees_monthly_history`
+- `employees_trend_current`
+- `workforce_monthly_events`
+- `workforce_monthly_summary`
 
 Important:
-- This demo dataset is a single snapshot, not a true historical time series.
-- Do not invent month-over-month, last-12-month, or synthetic trend analyses.
-- If the user asks for trends over time, explain that only the original snapshot is available and offer cross-sectional comparisons instead.
+- `employees` and `employees_current` are the original IBM HR snapshot rows.
+- The monthly trend tables are simulated from the base snapshot to support month-over-month and year-over-year analysis.
+- When using the simulated history, clearly say the trend is simulated from the current workforce baseline rather than sourced from a real HRIS time-series feed.
 
 TABLE: employees
 Description:
   - One row per employee from the original IBM HR attrition CSV.
-  - Use this for headcount, attrition, compensation, tenure, satisfaction, promotion, and demographic analysis.
-
-Core columns:
-  - Age
-  - Attrition
-  - BusinessTravel
-  - DailyRate
-  - Department
-  - DistanceFromHome
-  - Education
-  - EducationField
-  - EmployeeCount
-  - EmployeeNumber
-  - EnvironmentSatisfaction
-  - Gender
-  - HourlyRate
-  - JobInvolvement
-  - JobLevel
-  - JobRole
-  - JobSatisfaction
-  - MaritalStatus
-  - MonthlyIncome
-  - MonthlyRate
-  - NumCompaniesWorked
-  - Over18
-  - OverTime
-  - PercentSalaryHike
-  - PerformanceRating
-  - RelationshipSatisfaction
-  - StandardHours
-  - StockOptionLevel
-  - TotalWorkingYears
-  - TrainingTimesLastYear
-  - WorkLifeBalance
-  - YearsAtCompany
-  - YearsInCurrentRole
-  - YearsSinceLastPromotion
-  - YearsWithCurrManager
+  - Use this for current snapshot headcount, attrition, compensation, tenure, satisfaction, promotion, and demographic analysis.
 
 VIEW: employees_current
 Description:
   - Compatibility view that mirrors `employees`.
   - Safe to use for current/latest workforce questions.
 
+TABLE: employees_monthly_history
+Description:
+  - Simulated active employee monthly snapshots across a 36-month history.
+  - One row per active employee per month.
+  - Use this for simulated trend cuts by department, role, level, overtime, tenure, and promotion recency.
+
+Important columns:
+  - `SnapshotMonth`
+  - `EmployeeNumber`
+  - `SourceEmployeeNumber`
+  - `SyntheticEmployee`
+  - `IsLatestSnapshot`
+  - `HireDate`
+  - `HireThisMonth`
+  - `PromotedThisMonth`
+  - `Department`
+  - `JobRole`
+  - `JobLevel`
+  - `MonthlyIncome`
+  - `OverTime`
+  - `YearsAtCompany`
+  - `YearsInCurrentRole`
+  - `YearsSinceLastPromotion`
+  - `YearsWithCurrManager`
+  - `TenureBand`
+
+VIEW: employees_trend_current
+Description:
+  - Latest simulated active monthly snapshot only.
+  - Use when you want the current simulated monthly roster without filtering `employees_monthly_history` yourself.
+
+TABLE: workforce_monthly_events
+Description:
+  - Simulated monthly employee events.
+  - Contains one row per hire, promotion, or exit event.
+
+Important columns:
+  - `SnapshotMonth`
+  - `Department`
+  - `JobRole`
+  - `JobLevel`
+  - `EventType`
+  - `TenureAtEventYears`
+
+TABLE: workforce_monthly_summary
+Description:
+  - Simulated monthly KPI summary table for both enterprise (`Department='All'`) and department-level rows.
+  - Best table for month-over-month and year-over-year HR trend reporting.
+
+Important columns:
+  - `SnapshotMonth`
+  - `Department`
+  - `Headcount`
+  - `HiresThisMonth`
+  - `ExitsThisMonth`
+  - `PromotionsThisMonth`
+  - `NetChangeThisMonth`
+  - `MonthlyHiringRatePct`
+  - `MonthlyAttritionRatePct`
+  - `MonthlyPromotionRatePct`
+  - `Rolling12HiringRatePct`
+  - `Rolling12AttritionRatePct`
+  - `Rolling12PromotionRatePct`
+  - `MoMHeadcountChange`
+  - `MoMHeadcountChangePct`
+  - `YoYHeadcountChange`
+  - `YoYHeadcountChangePct`
+  - `AverageYearsAtCompany`
+  - `AverageYearsSinceLastPromotion`
+  - `OverTimeSharePct`
+  - `TenureBand0To1Pct`
+  - `TenureBand2To4Pct`
+  - `TenureBand5To9Pct`
+  - `TenureBand10PlusPct`
+
 Guidance:
-  - For current or latest questions, `employees_current` is fine.
-  - For general analysis, `employees` is also fine.
-  - There is no real time-series table in this environment.
+  - Use `employees_current` or `employees` for current snapshot questions.
+  - Use `workforce_monthly_summary` for month-over-month or year-over-year trend questions.
+  - Use `employees_monthly_history` when the user wants a simulated historical cut by employee attributes.
+  - Use `workforce_monthly_events` when the user specifically needs hires, promotions, or exits by month.
+  - For trend analysis, explicitly label findings as simulated.
 
 EXAMPLE QUERIES:
   -- Current headcount by department
@@ -69,27 +115,27 @@ EXAMPLE QUERIES:
   GROUP BY Department
   ORDER BY HeadCount DESC;
 
-  -- Attrition rate by department
-  SELECT Department,
-         COUNT(*) as Total,
-         SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) as Attrited,
-         ROUND(100.0 * SUM(CASE WHEN Attrition='Yes' THEN 1 ELSE 0 END) / COUNT(*), 1) as AttritionRate
-  FROM employees
-  GROUP BY Department
-  ORDER BY AttritionRate DESC;
+  -- Simulated enterprise headcount trend with month-over-month and year-over-year change
+  SELECT SnapshotMonth, Headcount, MoMHeadcountChangePct, YoYHeadcountChangePct
+  FROM workforce_monthly_summary
+  WHERE Department = 'All'
+  ORDER BY SnapshotMonth;
 
-  -- Employees promoted within the last year
-  SELECT Department,
-         COUNT(*) as RecentlyPromotedEmployees
-  FROM employees
-  WHERE YearsSinceLastPromotion < 1
-  GROUP BY Department
-  ORDER BY RecentlyPromotedEmployees DESC;
+  -- Simulated attrition trend by department
+  SELECT SnapshotMonth, Department, Rolling12AttritionRatePct
+  FROM workforce_monthly_summary
+  WHERE Department != 'All'
+  ORDER BY SnapshotMonth, Department;
 
-  -- Average salary hike by department
-  SELECT Department,
-         ROUND(AVG(PercentSalaryHike), 1) as AvgSalaryHike
-  FROM employees
-  GROUP BY Department
-  ORDER BY AvgSalaryHike DESC;
+  -- Simulated promotion trend by department
+  SELECT SnapshotMonth, Department, Rolling12PromotionRatePct
+  FROM workforce_monthly_summary
+  WHERE Department != 'All'
+  ORDER BY SnapshotMonth, Department;
+
+  -- Simulated tenure mix trend
+  SELECT SnapshotMonth, TenureBand0To1Pct, TenureBand2To4Pct, TenureBand5To9Pct, TenureBand10PlusPct
+  FROM workforce_monthly_summary
+  WHERE Department = 'All'
+  ORDER BY SnapshotMonth;
 """

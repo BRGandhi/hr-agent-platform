@@ -2,6 +2,9 @@
 
 This runbook covers day-2 operations for the HR Insights Platform: how to start it, validate it, troubleshoot it, and operate it safely as an internal service.
 
+Latest release context:
+- this runbook includes the simulated trend layer, configured export workbench, and insight artifact flows added in the April 16, 2026 release wave documented in [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md)
+
 ## 1. Operational Model
 
 The current platform consists of:
@@ -9,6 +12,7 @@ The current platform consists of:
 - static frontend assets served by FastAPI
 - one or more upstream LLM providers
 - three local SQLite stores
+- server-side artifact builders for configured Excel, one-page PDF, and PowerPoint exports
 
 Those stores are:
 - `hr_data.db`
@@ -92,7 +96,10 @@ Expected:
 4. Ask an HR question aligned to the signed-in user's access
 5. Generate a standard report and confirm the table shows `Download Excel`
 6. Generate a small aggregate table and confirm `Visual options` appears only there
-7. Ask an out-of-scope question and confirm refusal
+7. Ask a direct trend question such as `show me a mom trend of attrition` and confirm the response goes chart-first
+8. Open `Configure Excel` and confirm a workbook download succeeds
+9. Hide and restore the `While You Chat` strip
+10. Ask an out-of-scope question and confirm refusal
 
 ## 5. Files That Must Exist
 
@@ -109,6 +116,12 @@ If `hr_data.db` is missing, rebuild it with:
 
 ```bash
 python setup_db.py
+```
+
+If the base database exists but the simulated monthly trend layer needs to be refreshed, run:
+
+```bash
+python utils/build_workforce_history.py
 ```
 
 Deployment note:
@@ -135,6 +148,7 @@ Useful log patterns:
 - `Anthropic API error` or `OpenAI-compatible provider error`: upstream model problem
 - `Tool execution error`: problem in tool code or query path
 - `Could not prepare the Excel export`: failure in report export regeneration
+- `404 Not Found` on `/api/reports/export/excel-config`: frontend assets are newer than the running backend process
 
 ### 6.3 Recommended future logging posture
 For a bank-internal deployment, ship logs to a centralized platform and include:
@@ -169,6 +183,18 @@ python - <<'PY'
 import sqlite3
 conn = sqlite3.connect("hr_data.db")
 print(conn.execute("select count(*) from employees").fetchone())
+conn.close()
+PY
+```
+
+### Verify the simulated trend layer
+
+```bash
+python - <<'PY'
+import sqlite3
+conn = sqlite3.connect("hr_data.db")
+print(conn.execute("select count(*) from workforce_monthly_summary").fetchone())
+print(conn.execute("select max(SnapshotMonth) from workforce_monthly_summary").fetchone())
 conn.close()
 PY
 ```
@@ -256,6 +282,34 @@ Fix:
 - check the auth session user
 - inspect `conversation_memory` in `context_store.db`
 
+### 8.7 Trend values look wrong or show as missing
+Symptoms:
+- MoM or YoY values are blank, stale, or unexpectedly zero
+- the chat agent says the platform is snapshot-only when trend tables should exist
+
+Likely causes:
+- the running backend process was not restarted after code changes
+- `workforce_monthly_summary` is missing or stale
+- `/api/stats` is being served by an older process that does not expose `trend_summary` and `trend_series`
+
+Fix:
+- restart the `uvicorn` process or systemd service
+- verify `/api/stats` returns populated trend fields
+- verify `workforce_monthly_summary` exists in `hr_data.db`
+- hard refresh the browser after the backend restart
+
+### 8.8 Excel builder shows `Not Found`
+Symptoms:
+- the Excel builder opens but download returns `Not Found`
+
+Likely cause:
+- the browser loaded newer frontend assets before the backend was restarted, so `/api/reports/export/excel-config` is not present in the running server process
+
+Fix:
+- restart the backend
+- hard refresh the browser
+- if the route is still unavailable in a stale local session, the frontend can fall back to local workbook creation from the visible governed table context
+
 ## 9. Backup And Restore
 
 ### 9.1 What to back up
@@ -289,7 +343,7 @@ After restore, restart the app.
 ### 10.1 Pull latest code
 
 ```bash
-git pull origin master
+git pull origin <your-branch-or-main>
 ```
 
 ### 10.2 Refresh dependencies
@@ -313,6 +367,8 @@ This repo currently uses lightweight SQLite initialization logic rather than a m
 - confirm `access_control.db` still loads
 - confirm `context_store.db` still loads
 - rebuild `hr_data.db` if the source schema changed
+- run `python utils/build_workforce_history.py` if the simulated trend logic or trend tables changed without a full snapshot rebuild
+- restart the live backend before validating newly added routes or static assets
 
 ## 11. Security Operations Guidance
 

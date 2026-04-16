@@ -28,6 +28,7 @@ MAX_RELATED_MEMORY = 3
 MAX_HELPFUL_MEMORY = 2
 MAX_CONTEXT_DOCUMENTS = 2
 VISUAL_FOLLOW_UP_KEYWORDS = ("visual", "visualize", "visualization", "chart", "graph", "plot", "dashboard")
+DIRECT_VISUAL_REQUEST_STARTERS = ("show ", "show me ", "plot ", "graph ", "chart ", "visualize ", "display ")
 PRIOR_RESULT_REFERENCES = ("this", "that", "it", "above", "previous", "latest", "table", "result")
 HISTORY_LOOKUP_KEYWORDS = ("before", "earlier", "again", "last time", "previous", "prior", "past chat", "dive back")
 DOCUMENT_LOOKUP_KEYWORDS = ("policy", "policies", "access", "rule", "rules", "definition", "schema", "tag", "document")
@@ -136,6 +137,69 @@ CONTEXTUAL_REPLY_PHRASES = (
     "that one",
     "those ones",
 )
+CALCULATION_EXPLANATION_PHRASES = (
+    "how you calculated",
+    "how did you calculate",
+    "how was this calculated",
+    "how you compute",
+    "how did you compute",
+    "how was this computed",
+    "how did you get",
+    "show your work",
+    "details of the calculation",
+    "details of this calculation",
+    "details of the metric",
+    "how this metric was calculated",
+    "which columns you used",
+    "which columns did you use",
+    "what columns you used",
+    "what columns did you use",
+    "give me the formula",
+    "show me the formula",
+    "metric definition",
+    "define this metric",
+)
+COMPARATIVE_FOLLOW_UP_STARTERS = ("which", "what about", "how about", "are", "is", "do", "does", "who")
+COMPARATIVE_FOLLOW_UP_TERMS = (
+    "group",
+    "groups",
+    "women",
+    "woman",
+    "men",
+    "man",
+    "female",
+    "male",
+    "gender",
+    "demographic",
+    "department",
+    "departments",
+    "job role",
+    "job roles",
+    "job level",
+    "job levels",
+    "team",
+    "teams",
+    "cohort",
+    "cohorts",
+    "business unit",
+    "business units",
+)
+COMPARATIVE_ANALYSIS_TERMS = (
+    "more than",
+    "less than",
+    "higher",
+    "lower",
+    "highest",
+    "lowest",
+    "most",
+    "least",
+    "compare",
+    "comparison",
+    "versus",
+    "vs",
+    "difference",
+    "different",
+)
 FOLLOW_UP_REFERENCE_WORDS = {"this", "that", "it", "those", "them", "same"}
 FOLLOW_UP_SECTION_MARKERS = (
     "follow-up questions",
@@ -163,6 +227,33 @@ RATE_LIMIT_MESSAGE_MARKERS = (
     "too many requests",
     "try again shortly",
 )
+TREND_REQUEST_PATTERNS = (
+    re.compile(r"\btrend\b", re.IGNORECASE),
+    re.compile(r"\bmom\b", re.IGNORECASE),
+    re.compile(r"\bmonth over month\b", re.IGNORECASE),
+    re.compile(r"\byoy\b", re.IGNORECASE),
+    re.compile(r"\byear over year\b", re.IGNORECASE),
+    re.compile(r"\bover time\b", re.IGNORECASE),
+    re.compile(r"\btimeline\b", re.IGNORECASE),
+    re.compile(r"\bmonthly\b", re.IGNORECASE),
+)
+JOB_ROLE_ALIASES = {
+    "lab tech": "Laboratory Technician",
+    "lab technician": "Laboratory Technician",
+    "laboratory technician": "Laboratory Technician",
+    "research scientist": "Research Scientist",
+    "research director": "Research Director",
+    "manufacturing director": "Manufacturing Director",
+    "sales exec": "Sales Executive",
+    "sales executive": "Sales Executive",
+    "sales rep": "Sales Representative",
+    "sales representative": "Sales Representative",
+    "manager": "Manager",
+    "healthcare rep": "Healthcare Representative",
+    "health care rep": "Healthcare Representative",
+    "healthcare representative": "Healthcare Representative",
+    "human resources": "Human Resources",
+}
 FOLLOW_UP_METRIC_ORDER = (
     "headcount",
     "attrition",
@@ -236,6 +327,20 @@ class HRAgent:
         latest_assistant = self._latest_message_content("assistant").lower()
         return any(marker in latest_assistant for marker in CLARIFICATION_RESPONSE_MARKERS)
 
+    def _is_metric_explanation_request(self, user_message: str) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+        if any(phrase in normalized for phrase in CALCULATION_EXPLANATION_PHRASES):
+            return True
+        if "formula" in normalized:
+            return True
+        if ("calculation" in normalized or "calculated" in normalized or "computed" in normalized) and (
+            "column" in normalized or "metric" in normalized or "definition" in normalized or "outcome" in normalized
+        ):
+            return True
+        return False
+
     def _latest_user_context_anchor(self) -> str:
         fallback = ""
         for item in reversed(self.conversation_history):
@@ -248,6 +353,8 @@ class HRAgent:
                 fallback = content
 
             normalized = self._normalized_message(content)
+            if self._is_metric_explanation_request(content):
+                continue
             if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
                 return content
             if len(normalized.split()) > 4 or "?" in content:
@@ -272,6 +379,8 @@ class HRAgent:
                 fallback_response = response
 
             normalized = self._normalized_message(question)
+            if self._is_metric_explanation_request(question):
+                continue
             if any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS):
                 return {"question": question, "response": response}
             if len(normalized.split()) > 4 or "?" in question:
@@ -322,6 +431,9 @@ class HRAgent:
         if not normalized:
             return False
 
+        if self._is_metric_explanation_request(user_message):
+            return True
+
         words = normalized.split()
         if len(words) > 8:
             return False
@@ -335,9 +447,110 @@ class HRAgent:
             return True
         if any(word in FOLLOW_UP_REFERENCE_WORDS for word in words):
             return True
+        if self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return True
 
         mentions_hr_scope = any(keyword in normalized for keyword in HR_SCOPE_KEYWORDS)
         return not mentions_hr_scope
+
+    def _looks_like_comparative_hr_follow_up(
+        self,
+        user_message: str,
+        access_profile: AccessProfile | None = None,
+    ) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+
+        has_starter = any(
+            normalized == starter or normalized.startswith(f"{starter} ")
+            for starter in COMPARATIVE_FOLLOW_UP_STARTERS
+        )
+        if not has_starter:
+            return False
+
+        mentions_segment = any(term in normalized for term in COMPARATIVE_FOLLOW_UP_TERMS)
+        mentions_comparison = any(term in normalized for term in COMPARATIVE_ANALYSIS_TERMS)
+        requested_metrics = access_profile.requested_metrics_for_question(user_message) if access_profile else set()
+        return mentions_segment or mentions_comparison or bool(requested_metrics)
+
+    def _clarification_for_ambiguous_hr_intent(
+        self,
+        user_message: str,
+        reason: str,
+        follow_up_context: dict[str, str],
+        access_profile: AccessProfile,
+    ) -> str:
+        if "This platform only supports HR insights" not in str(reason or ""):
+            return ""
+
+        normalized = self._normalized_message(user_message)
+        if not normalized or len(normalized.split()) > 12:
+            return ""
+
+        if not self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return ""
+
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return (
+                "Do you want me to treat this as an HR follow-up to your earlier question?\n"
+                f"- Prior HR question: {prior_question}\n"
+                "- If yes, tell me the workforce measure and breakdown you want, such as attrition by gender, department, job role, or job level."
+            )
+
+        allowed_metrics = [metric for metric in access_profile.allowed_metrics if metric != "policy"]
+        allowed_metric_text = ", ".join(allowed_metrics) if allowed_metrics else "approved workforce metrics"
+        return (
+            "Do you want an HR comparison or breakdown?\n"
+            f"- For example, you can ask about {allowed_metric_text}.\n"
+            "- You can then cut that by gender, department, job role, job level, or another workforce group."
+        )
+
+    def _clarification_for_underspecified_comparison(
+        self,
+        user_message: str,
+        access_profile: AccessProfile,
+        follow_up_context: dict[str, str],
+    ) -> str:
+        if not self._looks_like_comparative_hr_follow_up(user_message, access_profile):
+            return ""
+
+        requested_metrics = access_profile.requested_metrics_for_question(user_message)
+        substantive_metrics = {metric for metric in requested_metrics if metric not in {"demographics", "policy"}}
+        if substantive_metrics:
+            return ""
+
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return (
+                "Which HR measure do you want me to compare in this follow-up?\n"
+                f"- Prior HR question: {prior_question}\n"
+                "- For example, I can compare attrition, headcount, satisfaction, or tenure by gender or another workforce group."
+            )
+
+        allowed_metrics = [metric for metric in access_profile.allowed_metrics if metric not in {"policy", "demographics"}]
+        allowed_metric_text = ", ".join(allowed_metrics) if allowed_metrics else "approved workforce metrics"
+        return (
+            "Which HR measure do you want me to compare?\n"
+            f"- For example: {allowed_metric_text}.\n"
+            "- Then tell me the workforce groups you want compared, such as women vs men, departments, job roles, or job levels."
+        )
+
+    def _clarification_for_metric_explanation_request(
+        self,
+        user_message: str,
+        follow_up_context: dict[str, str],
+    ) -> str:
+        if not self._is_metric_explanation_request(user_message):
+            return ""
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        if prior_question:
+            return ""
+        return (
+            "Which HR metric or prior result do you want me to explain?\n"
+            "- I can walk through the definition, columns used, formula, filters, and how the result was derived."
+        )
 
     def _build_contextual_message(
         self,
@@ -354,6 +567,45 @@ class HRAgent:
         if prior_response:
             contextual_message += f" Prior assistant context: {prior_response[:260]}."
         return contextual_message, follow_up_context
+
+    def _should_promote_prior_question_for_memory(
+        self,
+        user_message: str,
+        access_profile: AccessProfile | None = None,
+    ) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return True
+        if normalized in GENERIC_FOLLOW_UP_REPLIES:
+            return True
+        if any(normalized == phrase for phrase in CONTEXTUAL_REPLY_PHRASES):
+            return True
+        if re.fullmatch(r"(?:answer|respond to|explain|show)\s+question\s+\d+", normalized):
+            return True
+        if re.fullmatch(r"question\s+\d+", normalized):
+            return True
+
+        if not normalized.endswith("?") and len(normalized.split()) <= 3:
+            requested_metrics = access_profile.requested_metrics_for_question(user_message) if access_profile else set()
+            if not requested_metrics:
+                return True
+        return False
+
+    def _memory_question_for_turn(
+        self,
+        user_message: str,
+        follow_up_context: dict[str, str],
+        access_profile: AccessProfile | None = None,
+    ) -> str:
+        prior_question = str(follow_up_context.get("question") or "").strip()
+        raw_question = str(user_message or "").strip()
+        if not raw_question:
+            return prior_question
+        if not prior_question:
+            return raw_question
+        if self._should_promote_prior_question_for_memory(raw_question, access_profile):
+            return prior_question
+        return raw_question
 
     def _build_access_check_message(
         self,
@@ -384,6 +636,10 @@ class HRAgent:
         lowered = user_message.lower()
         if self._is_visualization_follow_up(user_message, table_context):
             return "visual_follow_up"
+        if access_profile and self._direct_trend_visual_spec(user_message, access_profile):
+            return "visualization"
+        if self._is_metric_explanation_request(user_message):
+            return "policy"
         if access_profile and access_profile.is_access_capability_question(user_message):
             return "policy"
         if any(keyword in lowered for keyword in HISTORY_LOOKUP_KEYWORDS):
@@ -396,6 +652,8 @@ class HRAgent:
 
     def _looks_like_output_request(self, user_message: str, route: str) -> bool:
         lowered = self._normalized_message(user_message)
+        if self._is_metric_explanation_request(user_message):
+            return False
         has_output_noun = any(noun in lowered for noun in REPORT_OUTPUT_NOUNS)
         has_output_verb = any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in REPORT_OUTPUT_VERBS)
         employee_listing_request = bool(re.search(r"\b(show|list|export|download|give|provide)\b.*\bemployees?\b", lowered))
@@ -482,7 +740,7 @@ class HRAgent:
         helpful_memory = self._dedupe_memories(helpful_memory)
 
         related_memory: list[dict] = []
-        if route in {"history_lookup", "report", "visual_follow_up"}:
+        if route in {"history_lookup", "report", "visual_follow_up", "visualization"}:
             related_memory = self.context_store.search_memories(
                 access_profile.email,
                 user_message,
@@ -522,16 +780,65 @@ class HRAgent:
             active_table_context,
             access_profile,
         )
+        explanation_clarification = self._clarification_for_metric_explanation_request(
+            user_message,
+            follow_up_context,
+        )
+        if explanation_clarification:
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self._trim_history()
+            self.conversation_history.append({"role": "assistant", "content": explanation_clarification})
+            self._trim_history()
+            yield {"type": "final_text", "text": explanation_clarification}
+            return
+        memory_question = self._memory_question_for_turn(user_message, follow_up_context, access_profile)
         allowed, reason = access_profile.can_access_question(access_check_message)
         if not allowed:
+            clarification_text = self._clarification_for_ambiguous_hr_intent(
+                user_message,
+                reason,
+                follow_up_context,
+                access_profile,
+            )
+            if clarification_text:
+                self.conversation_history.append({"role": "user", "content": user_message})
+                self._trim_history()
+                self.conversation_history.append({"role": "assistant", "content": clarification_text})
+                self._trim_history()
+                yield {"type": "final_text", "text": clarification_text}
+                return
             yield {"type": "final_text", "text": reason}
+            return
+
+        comparison_clarification = self._clarification_for_underspecified_comparison(
+            user_message,
+            access_profile,
+            follow_up_context,
+        )
+        if comparison_clarification:
+            self.conversation_history.append({"role": "user", "content": user_message})
+            self._trim_history()
+            self.conversation_history.append({"role": "assistant", "content": comparison_clarification})
+            self._trim_history()
+            yield {"type": "final_text", "text": comparison_clarification}
+            return
+
+        self.conversation_history.append({"role": "user", "content": user_message})
+        self._trim_history()
+
+        direct_trend_visual_events = self._build_direct_trend_visualization_events(
+            memory_question,
+            user_message,
+            access_profile,
+        )
+        if direct_trend_visual_events:
+            for event in direct_trend_visual_events:
+                yield event
             return
 
         route = self._route_request(access_check_message, active_table_context, access_profile)
         clarification_text = self._clarification_prompt_for_request(access_check_message, route, access_profile)
         if clarification_text:
-            self.conversation_history.append({"role": "user", "content": user_message})
-            self._trim_history()
             self.conversation_history.append({"role": "assistant", "content": clarification_text})
             self._trim_history()
             yield {"type": "final_text", "text": clarification_text}
@@ -565,8 +872,6 @@ class HRAgent:
             current_follow_up_context=follow_up_context,
         )
 
-        self.conversation_history.append({"role": "user", "content": user_message})
-        self._trim_history()
         iteration = 0
         last_text = ""
 
@@ -583,6 +888,7 @@ class HRAgent:
                 error_message = str(exc)
                 if self._is_rate_limit_error(error_message):
                     fallback_events = self._recover_from_rate_limit(
+                        memory_question,
                         user_message,
                         route,
                         access_profile,
@@ -641,6 +947,14 @@ class HRAgent:
                             "type": "chart",
                             "chart_json": parsed_result["chart_json"],
                             "title": parsed_result.get("title", "Chart"),
+                            "chart_type": parsed_result.get("chart_type", ""),
+                            "x_column": parsed_result.get("x_column", ""),
+                            "y_column": parsed_result.get("y_column", ""),
+                            "color_column": parsed_result.get("color_column", ""),
+                            "size_column": parsed_result.get("size_column", ""),
+                            "business_question": parsed_result.get("business_question", ""),
+                            "best_for": parsed_result.get("best_for", ""),
+                            "watch_out": parsed_result.get("watch_out", ""),
                         }
 
                     if isinstance(parsed_result, dict) and isinstance(parsed_result.get("options"), list):
@@ -655,16 +969,20 @@ class HRAgent:
                     full_table_data = None
                     table_title = tool_call.name
                     report_type = None
+                    report_period_months = None
                     table_total_rows = None
                     if isinstance(parsed_result, list):
                         full_table_data = parsed_result
                         table_data = parsed_result[:MAX_TABLE_ROWS]
                         table_total_rows = len(parsed_result)
+                        if tool_call.name == "query_hr_database":
+                            table_title = tool_input.get("explanation", "").strip() or "Query result"
                     elif isinstance(parsed_result, dict) and "results" in parsed_result and isinstance(parsed_result["results"], list):
                         full_table_data = parsed_result["results"]
                         table_data = parsed_result["results"][:MAX_TABLE_ROWS]
                         table_title = parsed_result.get("report_name") or parsed_result.get("focus_area") or tool_call.name
                         report_type = parsed_result.get("report_type")
+                        report_period_months = parsed_result.get("report_period_months")
                         table_total_rows = int(parsed_result.get("row_count") or len(parsed_result["results"]))
 
                     if full_table_data:
@@ -678,6 +996,7 @@ class HRAgent:
                         "table_data": table_data,
                         "title": table_title,
                         "report_type": report_type,
+                        "report_period_months": report_period_months,
                         "table_total_rows": table_total_rows,
                     }
 
@@ -699,7 +1018,7 @@ class HRAgent:
                 access_profile,
             )
             self.conversation_history[-1]["content"] = final_text
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
             return
 
@@ -713,11 +1032,11 @@ class HRAgent:
             )
             if self.conversation_history and self.conversation_history[-1].get("role") == "assistant":
                 self.conversation_history[-1]["content"] = final_text
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             yield {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}
         else:
             fallback = f"Agent reached max iterations ({MAX_AGENT_ITERATIONS}). Try a more specific HR question."
-            self.context_store.remember(access_profile.email, user_message, fallback)
+            self.context_store.remember(access_profile.email, memory_question, fallback)
             yield {"type": "error", "message": fallback}
 
     def _safe_parse_json(self, value: str):
@@ -753,14 +1072,382 @@ class HRAgent:
         normalized = self._normalized_message(text)
         return any(marker in normalized for marker in RATE_LIMIT_MESSAGE_MARKERS)
 
+    def _looks_like_direct_trend_visual_request(self, user_message: str) -> bool:
+        normalized = self._normalized_message(user_message)
+        if not normalized:
+            return False
+
+        if any(noun in normalized for noun in REPORT_OUTPUT_NOUNS):
+            return False
+        if any(term in normalized for term in ("download", "export", "excel", "pdf", "powerpoint", "ppt")):
+            return False
+        if self._report_request_has_columns(user_message) or self._report_request_has_cut(user_message):
+            return False
+
+        asks_trend = any(pattern.search(normalized) for pattern in TREND_REQUEST_PATTERNS)
+        asks_visual = (
+            any(keyword in normalized for keyword in VISUAL_FOLLOW_UP_KEYWORDS)
+            or any(normalized.startswith(starter) for starter in DIRECT_VISUAL_REQUEST_STARTERS)
+        )
+        return asks_trend and asks_visual
+
+    def _normalized_trend_metric_message(self, user_message: str) -> str:
+        normalized = self._normalized_message(user_message)
+        replacements = {
+            r"\bpromo\b": "promotion",
+            r"\bpromos\b": "promotions",
+            r"\bhc\b": "headcount",
+            r"\bhead count\b": "headcount",
+        }
+        for pattern, replacement in replacements.items():
+            normalized = re.sub(pattern, replacement, normalized)
+        return normalized
+
+    def _parse_trend_period_months(self, user_message: str) -> int:
+        normalized = self._normalized_trend_metric_message(user_message)
+
+        month_match = re.search(r"\b(?:last|past|over)\s+(\d+)\s+months?\b", normalized)
+        if month_match:
+            return max(1, int(month_match.group(1)))
+
+        month_match = re.search(r"\b(\d+)[-\s]+months?\b", normalized)
+        if month_match:
+            return max(1, int(month_match.group(1)))
+
+        year_match = re.search(r"\b(?:last|past|over)\s+(\d+)\s+years?\b", normalized)
+        if year_match:
+            return max(1, int(year_match.group(1)) * 12)
+
+        year_match = re.search(r"\b(\d+)[-\s]+years?\b", normalized)
+        if year_match:
+            return max(1, int(year_match.group(1)) * 12)
+
+        quarter_match = re.search(r"\b(?:last|past|over)\s+(\d+)\s+quarters?\b", normalized)
+        if quarter_match:
+            return max(1, int(quarter_match.group(1)) * 3)
+
+        quarter_match = re.search(r"\b(\d+)[-\s]+quarters?\b", normalized)
+        if quarter_match:
+            return max(1, int(quarter_match.group(1)) * 3)
+
+        if re.search(r"\b(?:yoy|year over year)\b", normalized):
+            return 24
+        return 12
+
+    def _infer_job_role_filter(self, user_message: str, access_profile: AccessProfile | None = None) -> str:
+        normalized = self._normalized_trend_metric_message(user_message)
+
+        for alias, canonical in JOB_ROLE_ALIASES.items():
+            if alias in normalized:
+                return canonical
+
+        if not hasattr(self.executor.db, "execute_query"):
+            return ""
+
+        try:
+            rows = self.executor.db.execute_query(
+                "SELECT DISTINCT JobRole FROM employees_current ORDER BY JobRole",
+                access_profile=access_profile,
+            )
+        except Exception:
+            return ""
+
+        job_roles = [str(row.get("JobRole") or "").strip() for row in rows if str(row.get("JobRole") or "").strip()]
+        lowered_tokens = normalized.split()
+
+        best_role = ""
+        best_score = 0
+        for role in job_roles:
+            role_tokens = [token for token in re.findall(r"[a-z0-9]+", role.lower()) if token]
+            score = 0
+            for query_token in lowered_tokens:
+                if query_token in {"show", "this", "trend", "for", "only", "just", "the", "a", "an", "year", "years", "month", "months"}:
+                    continue
+                if any(token.startswith(query_token) or query_token.startswith(token) for token in role_tokens):
+                    score += 1
+            if score > best_score and score >= max(1, min(2, len(role_tokens))):
+                best_role = role
+                best_score = score
+        return best_role
+
+    def _build_filtered_trend_rows(
+        self,
+        spec: dict,
+        access_profile: AccessProfile,
+    ) -> list[dict]:
+        job_role_filter = str(spec.get("job_role_filter") or "").strip()
+        if not job_role_filter or not hasattr(self.executor.db, "execute_query"):
+            return []
+
+        escaped_job_role = job_role_filter.replace("'", "''")
+        snapshot_rows = self.executor.db.execute_query(
+            f"""
+            SELECT
+                SnapshotMonth,
+                SnapshotYear,
+                SnapshotMonthNumber,
+                COUNT(*) AS Headcount,
+                SUM(CASE WHEN HireThisMonth = 1 THEN 1 ELSE 0 END) AS HiresThisMonth,
+                SUM(CASE WHEN PromotedThisMonth = 1 THEN 1 ELSE 0 END) AS PromotionsThisMonth,
+                ROUND(AVG(YearsAtCompany), 2) AS AverageYearsAtCompany,
+                ROUND(AVG(YearsSinceLastPromotion), 2) AS AverageYearsSinceLastPromotion,
+                ROUND(AVG(MonthlyIncome), 2) AS AverageMonthlyIncome,
+                ROUND(100.0 * SUM(CASE WHEN OverTime = 'Yes' THEN 1 ELSE 0 END) / COUNT(*), 2) AS OverTimeSharePct,
+                ROUND(100.0 * SUM(CASE WHEN TenureBand = '0-1' THEN 1 ELSE 0 END) / COUNT(*), 2) AS TenureBand0To1Pct,
+                ROUND(100.0 * SUM(CASE WHEN TenureBand = '2-4' THEN 1 ELSE 0 END) / COUNT(*), 2) AS TenureBand2To4Pct,
+                ROUND(100.0 * SUM(CASE WHEN TenureBand = '5-9' THEN 1 ELSE 0 END) / COUNT(*), 2) AS TenureBand5To9Pct,
+                ROUND(100.0 * SUM(CASE WHEN TenureBand = '10+' THEN 1 ELSE 0 END) / COUNT(*), 2) AS TenureBand10PlusPct
+            FROM employees_monthly_history
+            WHERE JobRole = '{escaped_job_role}'
+            GROUP BY SnapshotMonth, SnapshotYear, SnapshotMonthNumber
+            ORDER BY SnapshotMonth
+            """.strip(),
+            access_profile=access_profile,
+        )
+        if not snapshot_rows:
+            return []
+
+        exit_rows = self.executor.db.execute_query(
+            f"""
+            SELECT SnapshotMonth, COUNT(*) AS ExitsThisMonth
+            FROM workforce_monthly_events
+            WHERE EventType = 'exit'
+              AND JobRole = '{escaped_job_role}'
+            GROUP BY SnapshotMonth
+            ORDER BY SnapshotMonth
+            """.strip(),
+            access_profile=access_profile,
+        )
+        exits_by_month = {str(row.get("SnapshotMonth") or ""): int(row.get("ExitsThisMonth") or 0) for row in exit_rows}
+
+        rows: list[dict] = []
+        previous_headcount: int | None = None
+        for row in snapshot_rows:
+            snapshot_month = str(row.get("SnapshotMonth") or "")
+            headcount = int(row.get("Headcount") or 0)
+            hires = int(row.get("HiresThisMonth") or 0)
+            promotions = int(row.get("PromotionsThisMonth") or 0)
+            exits = exits_by_month.get(snapshot_month, 0)
+            start_headcount = previous_headcount if previous_headcount is not None else headcount
+            rows.append(
+                {
+                    "SnapshotMonth": snapshot_month,
+                    "SnapshotYear": int(row.get("SnapshotYear") or 0),
+                    "SnapshotMonthNumber": int(row.get("SnapshotMonthNumber") or 0),
+                    "Department": "All",
+                    "Headcount": headcount,
+                    "StartOfMonthHeadcount": start_headcount,
+                    "HiresThisMonth": hires,
+                    "ExitsThisMonth": exits,
+                    "PromotionsThisMonth": promotions,
+                    "NetChangeThisMonth": hires - exits,
+                    "MonthlyHiringRatePct": round((100.0 * hires / start_headcount), 2) if start_headcount else 0.0,
+                    "MonthlyAttritionRatePct": round((100.0 * exits / start_headcount), 2) if start_headcount else 0.0,
+                    "MonthlyPromotionRatePct": round((100.0 * promotions / start_headcount), 2) if start_headcount else 0.0,
+                    "AverageYearsAtCompany": float(row.get("AverageYearsAtCompany") or 0),
+                    "AverageYearsSinceLastPromotion": float(row.get("AverageYearsSinceLastPromotion") or 0),
+                    "AverageMonthlyIncome": float(row.get("AverageMonthlyIncome") or 0),
+                    "OverTimeSharePct": float(row.get("OverTimeSharePct") or 0),
+                    "TenureBand0To1Pct": float(row.get("TenureBand0To1Pct") or 0),
+                    "TenureBand2To4Pct": float(row.get("TenureBand2To4Pct") or 0),
+                    "TenureBand5To9Pct": float(row.get("TenureBand5To9Pct") or 0),
+                    "TenureBand10PlusPct": float(row.get("TenureBand10PlusPct") or 0),
+                    "MoMHeadcountChange": 0,
+                    "MoMHeadcountChangePct": 0.0,
+                    "Rolling12Hires": 0,
+                    "Rolling12Exits": 0,
+                    "Rolling12Promotions": 0,
+                    "Rolling12HiringRatePct": 0.0,
+                    "Rolling12AttritionRatePct": 0.0,
+                    "Rolling12PromotionRatePct": 0.0,
+                    "YoYHeadcountChange": 0,
+                    "YoYHeadcountChangePct": 0.0,
+                }
+            )
+            previous_headcount = headcount
+
+        if hasattr(self.executor.db, "_post_process_trend_rows"):
+            rows = self.executor.db._post_process_trend_rows(rows)
+
+        requested_period = int(spec.get("period_months") or 12)
+        return rows[-requested_period:]
+
+    def _direct_trend_visual_spec(
+        self,
+        user_message: str,
+        access_profile: AccessProfile,
+    ) -> dict | None:
+        if not self._looks_like_direct_trend_visual_request(user_message):
+            return None
+
+        normalized = self._normalized_trend_metric_message(user_message)
+        requested_metrics = access_profile.requested_metrics_for_question(normalized)
+        if not requested_metrics:
+            return None
+
+        period_months = self._parse_trend_period_months(user_message)
+        scope_name = str(access_profile.scope_name or "Workforce").strip() or "Workforce"
+        job_role_filter = self._infer_job_role_filter(user_message, access_profile)
+        title_scope = f"{job_role_filter} | {scope_name}" if job_role_filter else scope_name
+        explicit_promotion = any(term in normalized for term in ("promotion", "promote", "promoted", "promo"))
+        explicit_attrition = any(term in normalized for term in ("attrition", "attrited", "turnover", "retention"))
+        explicit_headcount = any(term in normalized for term in ("headcount", "workforce", "hc"))
+        explicit_tenure = any(term in normalized for term in ("tenure", "years at company", "long tenure", "early tenure"))
+
+        if explicit_promotion or ("tenure" in requested_metrics and any(term in normalized for term in ("promotion", "promote", "promoted"))):
+            rolling = bool(re.search(r"\b(?:rolling|trailing)\s*12\b", normalized))
+            return {
+                "report_type": "promotion_trend",
+                "y_column": "Rolling12PromotionRatePct" if rolling else "MonthlyPromotionRatePct",
+                "measure_label": "rolling 12-month promotion rate" if rolling else "monthly promotion rate",
+                "title": f"Promotion Trend | {title_scope} | Last {period_months} Months",
+                "period_months": period_months,
+                "job_role_filter": job_role_filter,
+            }
+
+        if explicit_attrition or "attrition" in requested_metrics:
+            rolling = bool(re.search(r"\b(?:rolling|trailing)\s*12\b", normalized))
+            return {
+                "report_type": "attrition_trend",
+                "y_column": "Rolling12AttritionRatePct" if rolling else "MonthlyAttritionRatePct",
+                "measure_label": "rolling 12-month attrition rate" if rolling else "monthly attrition rate",
+                "title": f"Attrition Trend | {title_scope} | Last {period_months} Months",
+                "period_months": period_months,
+                "job_role_filter": job_role_filter,
+            }
+
+        if explicit_tenure or "tenure" in requested_metrics:
+            if re.search(r"\b10\+|10 plus|long tenure\b", normalized):
+                y_column = "TenureBand10PlusPct"
+                measure_label = "10+ year tenure share"
+            elif re.search(r"\b5[\s-]*9\b", normalized):
+                y_column = "TenureBand5To9Pct"
+                measure_label = "5-9 year tenure share"
+            elif re.search(r"\b2[\s-]*4\b", normalized):
+                y_column = "TenureBand2To4Pct"
+                measure_label = "2-4 year tenure share"
+            elif re.search(r"\b0[\s-]*1\b|new hire|early tenure\b", normalized):
+                y_column = "TenureBand0To1Pct"
+                measure_label = "0-1 year tenure share"
+            else:
+                y_column = "AverageYearsAtCompany"
+                measure_label = "average years at company"
+
+            return {
+                "report_type": "tenure_distribution_trend",
+                "y_column": y_column,
+                "measure_label": measure_label,
+                "title": f"Tenure Trend | {title_scope} | Last {period_months} Months",
+                "period_months": period_months,
+                "job_role_filter": job_role_filter,
+            }
+
+        if explicit_headcount or "headcount" in requested_metrics:
+            if re.search(r"\b(?:yoy|year over year)\b", normalized) and "change" in normalized:
+                y_column = "YoYHeadcountChangePct"
+                measure_label = "year-over-year headcount change"
+            elif re.search(r"\b(?:mom|month over month)\b", normalized) and "change" in normalized:
+                y_column = "MoMHeadcountChangePct"
+                measure_label = "month-over-month headcount change"
+            else:
+                y_column = "Headcount"
+                measure_label = "headcount"
+
+            return {
+                "report_type": "headcount_trend",
+                "y_column": y_column,
+                "measure_label": measure_label,
+                "title": f"Headcount Trend | {title_scope} | Last {period_months} Months",
+                "period_months": period_months,
+                "job_role_filter": job_role_filter,
+            }
+
+        return None
+
+    def _build_direct_trend_visualization_events(
+        self,
+        memory_question: str,
+        user_message: str,
+        access_profile: AccessProfile,
+    ) -> list[dict]:
+        spec = self._direct_trend_visual_spec(user_message, access_profile)
+        if not spec:
+            return []
+
+        rows = self._build_filtered_trend_rows(spec, access_profile)
+        report_title = str(spec["title"]).strip() or spec["title"]
+
+        if not rows:
+            raw_report = self.executor.execute(
+                "generate_standard_report",
+                {
+                    "report_type": spec["report_type"],
+                    "period_months": spec["period_months"],
+                    "explanation": f"Build direct trend chart data for: {user_message}",
+                },
+                access_profile=access_profile,
+            )
+            parsed_report = self._safe_parse_json(raw_report)
+            rows = parsed_report.get("results") if isinstance(parsed_report, dict) else None
+            if not isinstance(rows, list) or not rows:
+                return []
+            report_title = str(parsed_report.get("report_name") or spec["title"]).strip() or spec["title"]
+
+        self.last_table_context = {"title": report_title, "rows": rows}
+
+        raw_chart = self.executor.execute(
+            "create_visualization",
+            {
+                "chart_type": "line",
+                "data": json.dumps(rows),
+                "x_column": "SnapshotMonth",
+                "y_column": spec["y_column"],
+                "title": spec["title"],
+                "question": user_message,
+            },
+            access_profile=access_profile,
+            table_context=self.last_table_context,
+        )
+        parsed_chart = self._safe_parse_json(raw_chart)
+        if not isinstance(parsed_chart, dict) or "chart_json" not in parsed_chart:
+            return []
+
+        filter_note = f" filtered to {spec['job_role_filter']}" if spec.get("job_role_filter") else ""
+        summary_text = (
+            f"Here is the {spec['measure_label']} trend for {access_profile.scope_name}{filter_note} over the last "
+            f"{spec['period_months']} months. This time series is simulated from the current workforce baseline."
+        )
+        final_text = self._finalize_response_text(summary_text, user_message, "visualization", access_profile)
+        memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
+        self.conversation_history.append({"role": "assistant", "content": final_text})
+        self._trim_history()
+
+        return [
+            {
+                "type": "chart",
+                "chart_json": parsed_chart["chart_json"],
+                "title": parsed_chart.get("title", spec["title"]),
+                "chart_type": parsed_chart.get("chart_type", "line"),
+                "x_column": parsed_chart.get("x_column", "SnapshotMonth"),
+                "y_column": parsed_chart.get("y_column", spec["y_column"]),
+                "color_column": parsed_chart.get("color_column", ""),
+                "size_column": parsed_chart.get("size_column", ""),
+                "business_question": parsed_chart.get("business_question", ""),
+                "best_for": parsed_chart.get("best_for", ""),
+                "watch_out": parsed_chart.get("watch_out", ""),
+            },
+            {"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0},
+        ]
+
     def _requests_visualization(self, user_message: str, route: str) -> bool:
-        if route == "visual_follow_up":
+        if route in {"visual_follow_up", "visualization"}:
             return True
         normalized = self._normalized_message(user_message)
         return any(keyword in normalized for keyword in VISUAL_FOLLOW_UP_KEYWORDS)
 
     def _recover_from_rate_limit(
         self,
+        memory_question: str,
         user_message: str,
         route: str,
         access_profile: AccessProfile,
@@ -800,7 +1487,7 @@ class HRAgent:
                 final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
                 self.conversation_history.append({"role": "assistant", "content": final_text})
                 self._trim_history()
-                memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+                memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
 
                 events = [
                     {
@@ -816,6 +1503,14 @@ class HRAgent:
                             "type": "chart",
                             "chart_json": recommended_option["chart_json"],
                             "title": recommended_option.get("title", f"Visualization for {title}"),
+                            "chart_type": recommended_option.get("chart_type", ""),
+                            "x_column": recommended_option.get("x_column", ""),
+                            "y_column": recommended_option.get("y_column", ""),
+                            "color_column": recommended_option.get("color_column", ""),
+                            "size_column": recommended_option.get("size_column", ""),
+                            "business_question": recommended_option.get("business_question", ""),
+                            "best_for": recommended_option.get("best_for", ""),
+                            "watch_out": recommended_option.get("watch_out", ""),
                         }
                     )
                 events.append({"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0})
@@ -830,7 +1525,7 @@ class HRAgent:
             final_text = self._finalize_response_text(fallback_text, user_message, route, access_profile)
             self.conversation_history.append({"role": "assistant", "content": final_text})
             self._trim_history()
-            memory_id = self.context_store.remember(access_profile.email, user_message, final_text)
+            memory_id = self.context_store.remember(access_profile.email, memory_question, final_text)
             return [{"type": "final_text", "text": final_text, "memory_id": memory_id, "feedback_score": 0}]
 
         return []
@@ -913,7 +1608,7 @@ class HRAgent:
         if not requested_metrics and route != "policy":
             requested_metrics.append("headcount")
 
-        if route == "visual_follow_up":
+        if route in {"visual_follow_up", "visualization"}:
             add_candidate("Can you show the HR table behind this visual?")
             add_candidate("Which departments or employee groups stand out most in this visual?")
 

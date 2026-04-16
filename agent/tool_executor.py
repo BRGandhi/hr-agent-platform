@@ -245,6 +245,7 @@ class ToolExecutor:
         y_col = str(inputs.get("y_column", "") or "").strip()
         title = str(inputs.get("title", "") or "").strip() or "HR Chart"
         color_col = str(inputs.get("color_column", "") or "").strip() or None
+        size_col = str(inputs.get("size_column", "") or "").strip() or None
         question = str(inputs.get("question", "") or "").strip()
 
         rows, resolved_title_or_error = self._resolve_visualization_rows(inputs, table_context)
@@ -261,19 +262,40 @@ class ToolExecutor:
                 y_col = self._choose_dimension_column(df, analysis_context, exclude={x_col} if x_col else None)
             if not color_col:
                 color_col = self._choose_metric_column(df, analysis_context)
+        elif chart_type == "indicator":
+            if not y_col:
+                y_col = self._choose_metric_column(df, analysis_context)
+        elif chart_type == "bubble":
+            if not x_col:
+                x_col = self._choose_metric_column(df, analysis_context)
+            if not y_col:
+                y_col = self._choose_metric_column(df, analysis_context, exclude={x_col} if x_col else None)
+            if not size_col:
+                size_col = self._choose_metric_column(df, analysis_context, exclude={x_col, y_col} if x_col and y_col else None) or y_col
+            if not color_col:
+                color_col = self._choose_dimension_column(df, analysis_context, exclude={x_col, y_col, size_col} if size_col else {x_col, y_col})
+        elif chart_type == "treemap":
+            if not x_col:
+                x_col = self._choose_dimension_column(df, analysis_context)
+            if not y_col:
+                y_col = self._choose_metric_column(df, analysis_context)
         elif not x_col and chart_type == "histogram":
             x_col = self._choose_metric_column(df, analysis_context)
         elif not x_col:
             x_col = self._choose_dimension_column(df, analysis_context)
 
-        if not y_col and chart_type in {"bar", "horizontal_bar", "stacked_bar", "pie", "donut", "line", "area", "box"}:
+        if not y_col and chart_type in {"bar", "horizontal_bar", "stacked_bar", "lollipop", "pie", "donut", "treemap", "line", "area", "box"}:
             y_col = self._choose_metric_column(df, analysis_context)
 
-        if not x_col and chart_type not in {"scatter"}:
+        if not x_col and chart_type not in {"scatter", "bubble", "indicator"}:
             return json.dumps({"error": "Visualization requires a valid x column or the latest table context."})
         if chart_type == "heatmap" and (not y_col or not color_col):
             return json.dumps({"error": "Heatmaps require x, y, and color value columns."})
-        if chart_type not in {"histogram", "pie", "donut", "heatmap"} and chart_type not in {"scatter"} and not y_col:
+        if chart_type == "bubble" and (not x_col or not y_col):
+            return json.dumps({"error": "Bubble charts require valid x and y columns."})
+        if chart_type == "indicator" and not y_col:
+            return json.dumps({"error": "Indicator charts require a valid metric column."})
+        if chart_type not in {"histogram", "pie", "donut", "treemap", "heatmap", "indicator"} and chart_type not in {"scatter", "bubble"} and not y_col:
             return json.dumps({"error": "Visualization requires a valid y column for this chart type."})
 
         try:
@@ -284,11 +306,25 @@ class ToolExecutor:
                 y_col=y_col,
                 title=title or resolved_title_or_error,
                 color_col=color_col,
+                size_col=size_col,
             )
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
 
-        return json.dumps({"chart_json": fig.to_json(), "title": title or resolved_title_or_error})
+        return json.dumps(
+            {
+                "chart_json": fig.to_json(),
+                "title": title or resolved_title_or_error,
+                "chart_type": chart_type,
+                "x_column": x_col,
+                "y_column": y_col,
+                "color_column": color_col,
+                "size_column": size_col,
+                "business_question": self._business_question_for_chart(chart_type, x_col, y_col, color_col),
+                "best_for": self._best_for_chart(chart_type),
+                "watch_out": self._watch_out_for_chart(chart_type),
+            }
+        )
 
     def _suggest_visualizations(self, inputs: dict, table_context: dict | None = None) -> str:
         rows, source_title_or_error = self._resolve_visualization_rows(inputs, table_context)
@@ -313,16 +349,17 @@ class ToolExecutor:
             reason: str,
             *,
             color_col: str | None = None,
+            size_col: str | None = None,
             score: float = 0.0,
             business_question: str = "",
             best_for: str = "",
             watch_out: str = "",
         ) -> None:
-            required_columns = {column for column in [x_col, y_col, color_col] if column}
+            required_columns = {column for column in [x_col, y_col, color_col, size_col] if column}
             if chart_df.empty or not required_columns.issubset(set(chart_df.columns)):
                 return
 
-            signature = (chart_type, tuple(chart_df.columns), x_col, y_col, color_col, title)
+            signature = (chart_type, tuple(chart_df.columns), x_col, y_col, color_col, size_col, title)
             if signature in seen_signatures:
                 return
 
@@ -334,6 +371,7 @@ class ToolExecutor:
                     y_col=y_col,
                     title=title,
                     color_col=color_col,
+                    size_col=size_col,
                 )
             except ValueError:
                 return
@@ -348,6 +386,10 @@ class ToolExecutor:
                     "business_question": business_question or self._business_question_for_chart(chart_type, x_col, y_col, color_col),
                     "best_for": best_for or self._best_for_chart(chart_type),
                     "watch_out": watch_out or self._watch_out_for_chart(chart_type),
+                    "x_column": x_col,
+                    "y_column": y_col,
+                    "color_column": color_col,
+                    "size_column": size_col,
                     "chart_json": fig.to_json(),
                 }
             )
@@ -356,6 +398,11 @@ class ToolExecutor:
         secondary_dimension = self._choose_dimension_column(df, analysis_context, exclude={primary_dimension} if primary_dimension else None)
         primary_metric = self._choose_metric_column(df, analysis_context)
         secondary_metric = self._choose_metric_column(df, analysis_context, exclude={primary_metric} if primary_metric else None)
+        tertiary_metric = self._choose_metric_column(
+            df,
+            analysis_context,
+            exclude={column for column in [primary_metric, secondary_metric] if column},
+        )
 
         if primary_dimension and primary_metric:
             chart_df = self._prepare_category_metric_frame(df, primary_dimension, primary_metric)
@@ -386,6 +433,18 @@ class ToolExecutor:
                 )
             else:
                 preferred_chart = "horizontal_bar" if self._prefer_horizontal_bars(chart_df, primary_dimension) else "bar"
+                add_option(
+                    "lollipop",
+                    chart_df,
+                    primary_dimension,
+                    primary_metric,
+                    f"{self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)}",
+                    "Consultant-style ranking view that keeps the ordering crisp without the visual weight of full bars.",
+                    score=9.6 if question_intents["ranking"] else 9.1,
+                    business_question=f"Which {self._humanize_label(primary_dimension).lower()} categories have the highest {self._humanize_label(primary_metric).lower()}?",
+                    best_for="Executive ranking views where the pecking order matters most.",
+                    watch_out="Less useful when exact totals need to be compared across many categories at once.",
+                )
                 add_option(
                     preferred_chart,
                     chart_df,
@@ -451,6 +510,19 @@ class ToolExecutor:
                         )
 
                 unique_categories = chart_df[primary_dimension].nunique(dropna=True)
+                if 2 <= unique_categories <= 10:
+                    add_option(
+                        "treemap",
+                        chart_df,
+                        primary_dimension,
+                        primary_metric,
+                        f"Share of {self._humanize_label(primary_metric)} by {self._humanize_label(primary_dimension)}",
+                        "A stronger composition view than a pie for showing relative weight across groups with clearer labels.",
+                        score=8.8 if question_intents["composition"] else 7.4,
+                        business_question=f"How is {self._humanize_label(primary_metric).lower()} distributed across {self._humanize_label(primary_dimension).lower()} groups?",
+                        best_for="Showing composition without forcing the audience to compare slice angles.",
+                        watch_out="Less ideal when there are many tiny groups competing for space.",
+                    )
                 if 2 <= unique_categories <= 6:
                     add_option(
                         "donut",
@@ -466,6 +538,28 @@ class ToolExecutor:
                     )
         elif primary_metric and secondary_metric:
             scatter_df = self._limit_rows(df[[primary_metric, secondary_metric]].dropna(), max_rows=250)
+            if primary_dimension and primary_dimension in df.columns:
+                bubble_columns = [primary_metric, secondary_metric, primary_dimension]
+                if tertiary_metric:
+                    bubble_columns.append(tertiary_metric)
+                bubble_df = self._limit_rows(df[bubble_columns].dropna(), max_rows=120)
+                add_option(
+                    "bubble",
+                    bubble_df,
+                    primary_metric,
+                    secondary_metric,
+                    f"{self._humanize_label(secondary_metric)} vs {self._humanize_label(primary_metric)}",
+                    "Relationship view with bubble sizing so standout groups are easier to spot in one frame.",
+                    color_col=primary_dimension,
+                    size_col=tertiary_metric or secondary_metric,
+                    score=9.0 if question_intents["relationship"] else 8.0,
+                    business_question=(
+                        f"Which groups stand out when {self._humanize_label(primary_metric).lower()} and "
+                        f"{self._humanize_label(secondary_metric).lower()} are reviewed together?"
+                    ),
+                    best_for="Correlation views where scale and grouping both matter.",
+                    watch_out="Can become dense if too many groups are shown at once.",
+                )
             add_option(
                 "scatter",
                 scatter_df,
@@ -494,6 +588,18 @@ class ToolExecutor:
                 watch_out="Does not show the relationship between two metrics.",
             )
         elif primary_metric:
+            add_option(
+                "indicator",
+                df[[primary_metric]].dropna(),
+                "",
+                primary_metric,
+                f"Headline {self._humanize_label(primary_metric)}",
+                "Big-number view for situations where the first question is simply the current headline metric.",
+                score=8.4 if not primary_dimension else 6.9,
+                business_question=f"What is the current headline value for {self._humanize_label(primary_metric).lower()}?",
+                best_for="One-number executive readouts and summary pages.",
+                watch_out="Needs a second chart if the audience also needs to know what is driving the number.",
+            )
             add_option(
                 "histogram",
                 df[[primary_metric]].dropna(),
@@ -529,6 +635,18 @@ class ToolExecutor:
                 count_df = self._aggregate_counts(df, count_dimension, count_metric)
                 preferred_chart = "horizontal_bar" if self._prefer_horizontal_bars(count_df, count_dimension) else "bar"
                 add_option(
+                    "lollipop",
+                    count_df,
+                    count_dimension,
+                    count_metric,
+                    f"Employee count by {self._humanize_label(count_dimension)}",
+                    "Clean ranking view that feels lighter and more presentation-ready than a default bar chart.",
+                    score=9.1,
+                    business_question=f"Which {self._humanize_label(count_dimension).lower()} categories have the highest employee count?",
+                    best_for="Roster-style ranking and consultant readouts.",
+                    watch_out="Less effective if the audience needs very fine-grained value comparisons.",
+                )
+                add_option(
                     preferred_chart,
                     count_df,
                     count_dimension,
@@ -544,7 +662,7 @@ class ToolExecutor:
                 share_dimension = self._choose_share_dimension(df, question, exclude={count_dimension})
                 if share_dimension:
                     share_df = self._aggregate_counts(df, share_dimension, count_metric)
-                    chart_type = "donut" if share_df[share_dimension].nunique(dropna=True) <= 7 else "bar"
+                    chart_type = "treemap" if share_df[share_dimension].nunique(dropna=True) <= 10 else "bar"
                     add_option(
                         chart_type,
                         share_df,
@@ -552,7 +670,7 @@ class ToolExecutor:
                         count_metric,
                         f"Employee mix by {self._humanize_label(share_dimension)}",
                         "Useful for showing the overall composition of the table rather than the rank order.",
-                        score=7.1 if chart_type == "donut" else 6.8,
+                        score=8.0 if chart_type == "treemap" else 6.8,
                         business_question=f"How is the workforce mix distributed across {self._humanize_label(share_dimension).lower()}?",
                         best_for="Workforce composition and mix.",
                         watch_out="Exact comparisons become harder as categories increase.",
@@ -648,42 +766,50 @@ class ToolExecutor:
         y_col: str,
         title: str,
         color_col: str | None = None,
+        size_col: str | None = None,
     ):
         if df.empty:
             raise ValueError("The visualization dataset is empty.")
 
         if chart_type != "histogram" and x_col and x_col not in df.columns:
             raise ValueError(f"Column '{x_col}' is not available in the table.")
-        if chart_type not in {"histogram", "pie", "donut", "heatmap"} and y_col and y_col not in df.columns:
+        if chart_type not in {"histogram", "pie", "donut", "treemap", "heatmap", "indicator"} and y_col and y_col not in df.columns:
             raise ValueError(f"Column '{y_col}' is not available in the table.")
         if chart_type == "histogram" and x_col not in df.columns:
             raise ValueError("Histogram requires a valid x column.")
-        if chart_type in {"pie", "donut"} and (x_col not in df.columns or y_col not in df.columns):
-            raise ValueError("Pie and donut charts require both a category column and a value column.")
-        if chart_type == "scatter" and (x_col not in df.columns or y_col not in df.columns):
-            raise ValueError("Scatter plots require two numeric columns.")
+        if chart_type in {"pie", "donut", "treemap", "lollipop"} and (x_col not in df.columns or y_col not in df.columns):
+            raise ValueError(f"{chart_type.replace('_', ' ').title()} charts require both a category column and a value column.")
+        if chart_type in {"scatter", "bubble"} and (x_col not in df.columns or y_col not in df.columns):
+            raise ValueError(f"{chart_type.replace('_', ' ').title()} charts require two numeric columns.")
         if chart_type == "heatmap" and (x_col not in df.columns or y_col not in df.columns or not color_col or color_col not in df.columns):
             raise ValueError("Heatmaps require x, y, and color value columns.")
+        if chart_type == "indicator" and y_col not in df.columns:
+            raise ValueError("Indicator charts require a valid metric column.")
         if color_col and color_col not in df.columns:
             color_col = None
+        if size_col and size_col not in df.columns:
+            size_col = None
 
         chart_df = df.copy()
-        if chart_type in {"bar", "horizontal_bar", "stacked_bar", "pie", "donut", "line", "area"}:
+        if chart_type in {"bar", "horizontal_bar", "stacked_bar", "lollipop", "pie", "donut", "treemap", "line", "area"}:
             required_cols = [col for col in [x_col, y_col, color_col] if col]
             chart_df = chart_df[required_cols].dropna()
-        elif chart_type == "scatter":
-            chart_df = chart_df[[x_col, y_col] + ([color_col] if color_col else [])].dropna()
+        elif chart_type in {"scatter", "bubble"}:
+            extra_cols = ([color_col] if color_col else []) + ([size_col] if size_col else [])
+            chart_df = chart_df[[x_col, y_col] + extra_cols].dropna()
         elif chart_type == "box":
             chart_df = chart_df[[x_col, y_col]].dropna()
         elif chart_type == "histogram":
             chart_df = chart_df[[x_col]].dropna()
         elif chart_type == "heatmap":
             chart_df = chart_df[[x_col, y_col, color_col]].dropna()
+        elif chart_type == "indicator":
+            chart_df = chart_df[[y_col]].dropna()
 
         if chart_df.empty:
             raise ValueError("The selected columns do not contain enough data to plot.")
 
-        if chart_type in {"bar", "horizontal_bar", "stacked_bar"}:
+        if chart_type in {"bar", "horizontal_bar", "stacked_bar", "lollipop"}:
             if self._is_datetime_column(chart_df, x_col):
                 chart_df = chart_df.sort_values(x_col)
             else:
@@ -700,6 +826,29 @@ class ToolExecutor:
                 text_auto=True,
                 color_discrete_sequence=CHART_PALETTE,
             )
+        elif chart_type == "lollipop":
+            base_df = chart_df.sort_values(y_col, ascending=False)
+            fig = go.Figure()
+            for _, row in base_df.iterrows():
+                fig.add_shape(
+                    type="line",
+                    x0=0,
+                    x1=row[y_col],
+                    y0=row[x_col],
+                    y1=row[x_col],
+                    line=dict(color="rgba(11,92,171,0.28)", width=3),
+                )
+            fig.add_trace(
+                go.Scatter(
+                    x=base_df[y_col],
+                    y=base_df[x_col],
+                    mode="markers",
+                    marker=dict(size=16, color="#0B5CAB", line=dict(color="#FFFFFF", width=2)),
+                    hovertemplate=f"{self._humanize_label(x_col)}: %{{y}}<br>{self._humanize_label(y_col)}: %{{x}}<extra></extra>",
+                    name=self._humanize_label(y_col),
+                )
+            )
+            fig.update_layout(title=title)
         elif chart_type == "horizontal_bar":
             fig = px.bar(
                 chart_df,
@@ -739,6 +888,15 @@ class ToolExecutor:
                 hole=0.52,
                 color_discrete_sequence=CHART_PALETTE,
             )
+        elif chart_type == "treemap":
+            fig = px.treemap(
+                self._limit_chart_categories(chart_df, x_col, y_col, max_categories=10),
+                path=[px.Constant("All"), x_col],
+                values=y_col,
+                title=title,
+                color=y_col,
+                color_continuous_scale=["#DCEBFA", "#0B5CAB"],
+            )
         elif chart_type == "histogram":
             fig = px.histogram(
                 chart_df,
@@ -755,6 +913,17 @@ class ToolExecutor:
                 color=color_col,
                 title=title,
                 color_discrete_sequence=CHART_PALETTE,
+            )
+        elif chart_type == "bubble":
+            fig = px.scatter(
+                chart_df,
+                x=x_col,
+                y=y_col,
+                color=color_col,
+                size=size_col,
+                title=title,
+                color_discrete_sequence=CHART_PALETTE,
+                size_max=30,
             )
         elif chart_type == "line":
             fig = px.line(
@@ -807,10 +976,27 @@ class ToolExecutor:
                 )
             )
             fig.update_layout(title=title)
+        elif chart_type == "indicator":
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if y_col in chart_df.columns else None)
+            numeric_values = pd.to_numeric(chart_df[y_col], errors="coerce").dropna()
+            aggregated_value = float(numeric_values.mean()) if len(numeric_values) > 1 else float(numeric_values.iloc[0])
+            fig = go.Figure(
+                go.Indicator(
+                    mode="number",
+                    value=aggregated_value,
+                    number=dict(
+                        prefix=str(metric_profile.get("tickprefix", "") or ""),
+                        suffix=str(metric_profile.get("ticksuffix", "") or ""),
+                        valueformat=f",.{int(metric_profile.get('precision', 1) or 0)}f",
+                    ),
+                    title={"text": title},
+                )
+            )
         else:
             raise ValueError(f"Unsupported chart type '{chart_type}'.")
 
-        self._style_figure(fig, chart_type, x_col=x_col, y_col=y_col, color_col=color_col, chart_df=chart_df)
+        fig.update_layout(meta={"chartType": chart_type})
+        self._style_figure(fig, chart_type, x_col=x_col, y_col=y_col, color_col=color_col, size_col=size_col, chart_df=chart_df)
         return fig
 
     def _style_figure(
@@ -821,6 +1007,7 @@ class ToolExecutor:
         x_col: str = "",
         y_col: str = "",
         color_col: str | None = None,
+        size_col: str | None = None,
         chart_df: pd.DataFrame | None = None,
     ) -> None:
         fig.update_layout(
@@ -863,6 +1050,8 @@ class ToolExecutor:
 
         if chart_type in {"line", "area"}:
             fig.update_layout(hovermode="x unified")
+        elif chart_type in {"scatter", "bubble"}:
+            fig.update_layout(hovermode="closest")
 
         if chart_type == "horizontal_bar":
             metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
@@ -878,6 +1067,18 @@ class ToolExecutor:
                     f"{y_label}: {self._plotly_value_token(metric_profile, 'x')}<extra></extra>"
                 ),
                 selector=dict(type="bar"),
+            )
+        elif chart_type == "lollipop":
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            fig.update_xaxes(title_text=y_label)
+            fig.update_yaxes(title_text=x_label, automargin=True, categoryorder="total ascending")
+            self._apply_numeric_axis_format(fig, "x", metric_profile)
+            fig.update_traces(
+                hovertemplate=(
+                    f"{x_label}: %{{y}}<br>"
+                    f"{y_label}: {self._plotly_value_token(metric_profile, 'x')}<extra></extra>"
+                ),
+                selector=dict(type="scatter"),
             )
         elif chart_type in {"bar", "stacked_bar", "line", "area", "box"}:
             metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
@@ -911,7 +1112,7 @@ class ToolExecutor:
                         f"{y_label}: {self._plotly_value_token(metric_profile, 'y')}<extra></extra>"
                     )
                 )
-        elif chart_type == "scatter":
+        elif chart_type in {"scatter", "bubble"}:
             x_profile = self._metric_profile(x_col, chart_df[x_col] if chart_df is not None and x_col in chart_df.columns else None)
             y_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
             fig.update_xaxes(title_text=x_label)
@@ -921,7 +1122,13 @@ class ToolExecutor:
             fig.update_traces(
                 hovertemplate=(
                     f"{x_label}: {self._plotly_value_token(x_profile, 'x')}<br>"
-                    f"{y_label}: {self._plotly_value_token(y_profile, 'y')}<extra></extra>"
+                    f"{y_label}: {self._plotly_value_token(y_profile, 'y')}"
+                    + (
+                        f"<br>{self._humanize_label(size_col or '')}: %{{marker.size:,.1f}}"
+                        if chart_type == "bubble" and size_col
+                        else ""
+                    )
+                    + "<extra></extra>"
                 )
             )
         elif chart_type == "histogram":
@@ -948,6 +1155,17 @@ class ToolExecutor:
                 ),
             )
             fig.update_layout(showlegend=True)
+        elif chart_type == "treemap":
+            metric_profile = self._metric_profile(y_col, chart_df[y_col] if chart_df is not None and y_col in chart_df.columns else None)
+            fig.update_traces(
+                texttemplate="%{label}<br>%{percentRoot:.1%}",
+                hovertemplate=(
+                    f"{x_label}: %{{label}}<br>"
+                    f"{y_label}: {self._plotly_value_token(metric_profile, 'value')}<br>"
+                    "Share: %{percentRoot:.1%}<extra></extra>"
+                ),
+            )
+            fig.update_layout(coloraxis_showscale=False)
         elif chart_type == "heatmap":
             metric_profile = self._metric_profile(color_col or "", chart_df[color_col] if chart_df is not None and color_col and color_col in chart_df.columns else None)
             fig.update_xaxes(title_text=x_label, showgrid=False)
@@ -962,6 +1180,12 @@ class ToolExecutor:
                     f"{self._humanize_label(color_col or '')}: {self._plotly_value_token(metric_profile, 'z')}<extra></extra>"
                 ),
                 selector=dict(type="heatmap"),
+            )
+        elif chart_type == "indicator":
+            fig.update_layout(
+                margin=dict(t=84, b=28, l=42, r=42),
+                paper_bgcolor="rgba(255,255,255,0)",
+                plot_bgcolor="rgba(255,255,255,0)",
             )
 
     def _metric_profile(self, column_name: str, series: pd.Series | None = None) -> dict[str, str | int]:
@@ -1053,17 +1277,19 @@ class ToolExecutor:
         x_label = self._humanize_label(x_col).lower()
         y_label = self._humanize_label(y_col).lower()
         color_label = self._humanize_label(color_col or "").lower()
-        if chart_type in {"bar", "horizontal_bar"}:
+        if chart_type in {"bar", "horizontal_bar", "lollipop"}:
             return f"Which {x_label} categories have the highest {y_label}?"
         if chart_type == "stacked_bar":
             return f"How does {y_label} split by {color_label} within each {x_label}?"
         if chart_type in {"pie", "donut"}:
             return f"What share of {y_label} comes from each {x_label} category?"
+        if chart_type == "treemap":
+            return f"How is {y_label} distributed across {x_label} groups?"
         if chart_type == "line":
             return f"How is {y_label} changing over {x_label}?"
         if chart_type == "area":
             return f"How much total {y_label} is building up over {x_label}?"
-        if chart_type == "scatter":
+        if chart_type in {"scatter", "bubble"}:
             return f"How are {x_label} and {y_label} related?"
         if chart_type == "histogram":
             return f"How is {x_label} distributed?"
@@ -1071,6 +1297,8 @@ class ToolExecutor:
             return f"How does the spread of {y_label} differ by {x_label}?"
         if chart_type == "heatmap":
             return f"Where are the highest and lowest {color_label} combinations across {x_label} and {y_label}?"
+        if chart_type == "indicator":
+            return f"What is the current headline value for {y_label}?"
         return "What is the clearest way to view this workforce pattern?"
 
     def _best_for_chart(self, chart_type: str) -> str:
@@ -1078,14 +1306,18 @@ class ToolExecutor:
             "bar": "Fast ranking and straightforward category comparison.",
             "horizontal_bar": "Readable ranking when labels are longer or there are more categories.",
             "stacked_bar": "Showing total volume and mix in the same view.",
+            "lollipop": "Crisp executive ranking with less visual weight than a full bar chart.",
             "pie": "High-level share of mix with a very small number of categories.",
             "donut": "Executive-friendly share of mix for a small set of groups.",
+            "treemap": "Composition views where relative weight matters more than exact angles.",
             "line": "Trend direction and inflection points over time.",
             "area": "Trend plus magnitude in one view.",
             "scatter": "Relationship, clustering, and outlier detection between two measures.",
+            "bubble": "Relationship plus scale when you want a third metric in the same frame.",
             "histogram": "Distribution shape, concentration, and skew.",
             "box": "Spread, median, and outlier comparison across groups.",
             "heatmap": "Hotspot detection across two dimensions.",
+            "indicator": "One-number headline readouts and summary pages.",
         }
         return mapping.get(chart_type, "Understanding the main workforce pattern quickly.")
 
@@ -1094,14 +1326,18 @@ class ToolExecutor:
             "bar": "Composition within categories stays hidden.",
             "horizontal_bar": "Secondary once label length is no longer a problem.",
             "stacked_bar": "Segment-to-segment comparison can get hard in dense charts.",
+            "lollipop": "Not ideal when the audience needs exact side-by-side bar lengths.",
             "pie": "Precise comparisons become difficult once there are many slices.",
             "donut": "Not ideal for exact rank-order comparison.",
+            "treemap": "Tiny groups can become hard to read when too many categories are included.",
             "line": "Only use when the x-axis has a real order.",
             "area": "Can obscure exact comparisons between nearby values.",
             "scatter": "Less intuitive when the relationship is weak or noisy.",
+            "bubble": "Bubble size can overpower the story if the size metric is not meaningful.",
             "histogram": "Does not explain which categories drive the pattern.",
             "box": "More analytical than narrative for some business audiences.",
             "heatmap": "Less precise than bars when exact ranking matters most.",
+            "indicator": "Does not explain what is driving the number on its own.",
         }
         return mapping.get(chart_type, "Use the chart that answers the decision question most directly.")
 
@@ -1393,6 +1629,10 @@ class ToolExecutor:
     def _generate_standard_report(self, inputs: dict, access_profile: AccessProfile | None) -> str:
         report_type = inputs.get("report_type", "").strip().lower()
         explanation = inputs.get("explanation", "").strip()
+        try:
+            period_months = int(inputs.get("period_months", 12) or 12)
+        except (TypeError, ValueError):
+            period_months = 12
         allowed_metrics = set(access_profile.allowed_metrics) if access_profile else {"all"}
 
         if report_type == "active_headcount":
@@ -1431,6 +1671,42 @@ class ToolExecutor:
                 WHERE Attrition = 'Yes'
                 ORDER BY Department, JobRole, EmployeeNumber
             """
+        elif report_type in {"workforce_trend", "headcount_trend", "attrition_trend", "promotion_trend", "tenure_distribution_trend"}:
+            required_metrics = {
+                "workforce_trend": {"headcount", "attrition", "tenure"},
+                "headcount_trend": {"headcount"},
+                "attrition_trend": {"attrition"},
+                "promotion_trend": {"tenure"},
+                "tenure_distribution_trend": {"tenure"},
+            }
+            needed = required_metrics.get(report_type, {"headcount"})
+            if access_profile and "all" not in allowed_metrics and not needed.issubset(allowed_metrics):
+                return json.dumps({"error": "This trend report is outside your role-based access"})
+
+            report_name, rows = self.db.get_periodic_report_rows(
+                report_type,
+                access_profile=access_profile,
+                period_months=period_months,
+            )
+            if not rows:
+                return json.dumps({"error": "Trend reporting data is not available for this request."})
+            return json.dumps(
+                {
+                    "report_name": report_name,
+                    "report_type": report_type,
+                    "report_period_months": period_months,
+                    "scope_name": access_profile.scope_name if access_profile else "Enterprise",
+                    "row_count": len(rows),
+                    "note": (
+                        f"This report uses simulated monthly trend data derived from the current workforce baseline "
+                        f"for the last {period_months} months."
+                    ),
+                    "simulated": True,
+                    "explanation": explanation,
+                    "results": rows,
+                },
+                default=str,
+            )
         else:
             return json.dumps({"error": "Unsupported report type"})
 
@@ -1439,6 +1715,7 @@ class ToolExecutor:
             {
                 "report_name": report_name,
                 "report_type": report_type,
+                "report_period_months": 0,
                 "scope_name": access_profile.scope_name if access_profile else "Enterprise",
                 "row_count": len(rows),
                 "note": (

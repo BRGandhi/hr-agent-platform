@@ -66,6 +66,28 @@ class VisualizationToolTests(unittest.TestCase):
         self.assertEqual(figure["data"][0]["type"], "heatmap")
         self.assertIn("colorscale", figure["data"][0])
 
+    def test_suggest_visualizations_prefers_lollipop_for_rank_questions(self):
+        rows = [
+            {"Department": "Sales", "AttritionRate_pct": 37.5},
+            {"Department": "Research & Development", "AttritionRate_pct": 24.8},
+            {"Department": "Human Resources", "AttritionRate_pct": 22.0},
+        ]
+
+        payload = json.loads(
+            self.executor._suggest_visualizations(
+                {
+                    "data": json.dumps(rows),
+                    "title": "Attrition ranking",
+                    "question": "Which departments have the highest attrition rate?",
+                    "max_options": 4,
+                }
+            )
+        )
+
+        self.assertEqual(payload["options"][0]["chart_type"], "lollipop")
+        self.assertIn("x_column", payload["options"][0])
+        self.assertIn("y_column", payload["options"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

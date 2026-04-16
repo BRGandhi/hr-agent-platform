@@ -1,10 +1,11 @@
 # Platform Spec - 2026-04-03
 
-This document summarizes the product, agent, context-layer, data, and UI changes completed on April 3, 2026.
+This document started as the product, agent, context-layer, data, and UI spec for the April 3, 2026 release wave.
 
-It is intended to be the single spec-style reference for the current release wave, not just a changelog. It reflects:
-- shipped work in commits `904e9cb`, `a1d6a80`, and `db78874`
-- the current workspace UI default-state update where `Favorite Topics` opens by default and the other sidebar history sections start collapsed
+It is still intended to be the spec-style reference for the current product surface rather than just a changelog. It now reflects:
+- the April 3 release wave
+- the later April 16 trend, export, and workspace expansion wave documented in [RELEASE_NOTES_2026-04-16.md](RELEASE_NOTES_2026-04-16.md)
+- the current sidebar default-state update where all left-panel chat-history sections load collapsed by default
 
 ## 1. Product Intent
 
@@ -19,11 +20,15 @@ The target user experience is closer to an executive HR analytics assistant than
 
 ## 2. Release Summary
 
-The April 3 release wave delivered four major outcomes:
+The current release wave now delivers eight major outcomes:
 - a more agentic retrieval and routing flow before the final answer is generated
 - a stronger context and memory layer with durable history, strict relevance, and cached recall
 - a more personalized product surface across the home screen, sidebar, and in-chat follow-ups
 - a more polished HR-leader UI with clearer KPI language, cleaner response rendering, and tighter navigation defaults
+- a governed 36-month simulated workforce trend layer with MoM, YoY, rolling-12, and tenure-mix measures
+- period-based trend reporting that now flows into stats, exports, and saved-memory behavior
+- a configurable Excel builder plus one-page PDF and PowerPoint artifacts on the right surfaces
+- stronger visualization guidance and more accurate direct trend-chart routing
 
 ## 3. Functional Scope Added Or Refined Today
 
@@ -51,8 +56,7 @@ Required order:
 - `Settings`
 
 Required default state:
-- `Favorite Topics` is expanded by default
-- `Favorite Chats`, `Relevant Chats`, and `Past Chats` are collapsed by default
+- `Favorite Topics`, `Favorite Chats`, `Relevant Chats`, and `Past Chats` are collapsed by default
 - collapse state persists in browser storage once the user changes it
 
 ### 3.3 HR leader copy pass
@@ -95,6 +99,9 @@ Supported route patterns include:
 - `history_lookup`
 - `visual_follow_up`
 
+Current direct-routing refinement:
+- simple trend-chart requests such as MoM or YoY trend asks should short-circuit into a chart-first path instead of asking generic report-builder clarification questions
+
 Expected effect:
 - database questions should prioritize HR SQL tools
 - policy questions should prioritize approved document retrieval
@@ -110,11 +117,15 @@ Supported examples:
 - `show me`
 - `break it down`
 - `job level`
+- `answer question 1`
+- `show me how you calculated this metric`
 
 Required behavior:
 - if the active session contains a recent substantive HR turn, the short reply inherits that context
 - if the live session anchor is missing or thin, the agent can fall back to the user's recent stored memory
 - access validation must run on the resolved HR intent, not on the raw one-word reply in isolation
+- calculation-definition follow-ups should continue from the prior HR result instead of being treated as fresh report requests or out-of-scope prompts
+- direct shorthand trend follow-ups should resolve common aliases such as `promo`, `3 year`, or `lab tech` when the active context makes the intended trend slice clear
 
 ## 5. Tooling And Agentic Retrieval Specification
 
@@ -145,6 +156,7 @@ Required behavior:
 - `Yes` and `No` feedback is stored against saved responses
 - positively rated or repeatedly reused answers can influence future recommendations
 - helpful prior answers should only surface when the current question is genuinely close, not just loosely related
+- favorite-chat ranking should reward both reuse frequency and positive feedback
 
 ## 6. Context And Memory Layer Specification
 
@@ -168,6 +180,9 @@ Each memory record should include:
 - timestamps
 - feedback score
 - topic labels where available
+
+Normalization rule:
+- if the live user message is only a thin follow-up such as `yes`, `show me`, or `answer question 1`, the saved memory question may be promoted to the underlying substantive HR question
 
 ### 6.3 Strict relevance
 
@@ -198,6 +213,9 @@ Definitions:
 - `Relevant Chats`: strict role-aware and topic-aware matches
 - `Past Chats`: the broader cross-session question history for the signed-in user
 
+Quality rule:
+- thin shorthand follow-ups must not displace the substantive business question in favorite-chat or center-board personalization
+
 ## 7. Data And Access Specification
 
 ### 7.1 Current demo data model
@@ -205,9 +223,10 @@ Definitions:
 The current platform runs on the original IBM HR attrition dataset.
 
 Current assumptions:
-- the analytics dataset is a single current-state snapshot
-- the system should not claim month-over-month or rolling-12-month insight from synthetic panel data
+- the analytics dataset includes the original current-state snapshot plus a governed 36-month simulated monthly trend layer derived from that baseline
+- the system may answer month-over-month, year-over-year, and rolling-12-month questions when it clearly labels the trend as simulated from the current workforce baseline rather than sourced from a real HRIS time-series feed
 - employee-level outputs rely on `EmployeeNumber` rather than real employee names
+- filtered trend views can now be built either from the aggregate monthly summary table or from the detailed simulated employee history and event tables
 
 ### 7.2 Current workforce KPIs
 
@@ -220,6 +239,11 @@ Primary KPIs in the current product:
 - attrition rate
 - promoted in last year
 - average time to promotion
+- rolling-12 attrition
+- rolling-12 promotion
+- headcount MoM change
+- headcount YoY change
+- tenure distribution mix
 
 KPI presentation rule:
 - headcount is always the anchor KPI when available
@@ -254,6 +278,8 @@ Required design behavior:
 - keep the KPI label and note readable for an HR leadership audience
 - keep cards visually balanced with the composer beneath them
 - remove internal-sounding helper text such as `Pinned first...`
+- allow the user to customize, pin, and hide tiles without breaking the default governed board
+- use icon-first pinning controls rather than text-heavy `Pin` and `Pinned` labels
 
 ### 8.3 Prompt cards
 
@@ -264,6 +290,8 @@ Required behavior:
 - CTA text is smaller and secondary
 - generic giant `Ask` or `Explore` treatments should not dominate the card
 - the prompts should reflect current access and prior interests
+- the featured prompt should prefer the substantive anchored HR question rather than a thin follow-up such as `yes` or `answer question 1`
+- the in-chat proactive insight strip should be dismissible and restorable
 
 ## 9. Sidebar UI Specification
 
@@ -284,6 +312,7 @@ Required copy and interaction behavior:
 - clicking a topic filters favorite chats to that theme
 - saved chat buttons should use the question as the button label
 - weakly related past questions should not appear under `Relevant Chats`
+- metric-definition and methodology questions are valid in-scope follow-ups when they refer to the prior HR result
 
 ## 10. Top Bar Specification
 
@@ -322,6 +351,8 @@ Required behavior:
 - a short follow-up after a generated answer continues the current thread
 - a short follow-up after a recalled saved chat continues the recalled thread
 - the latest table remains available for visual follow-ups when appropriate
+- a simple trend ask should prefer a trend chart response rather than defaulting into the report workflow
+- a filtered trend ask such as `show this 3 year promo trend for only lab tech` should preserve the intended measure, period, and role filter
 
 ## 12. API And Backend Surface Changes From Today
 
@@ -330,6 +361,11 @@ Important backend and API behaviors in today's release wave:
 - `POST /api/memories/{memory_id}/recall` returns saved insight summaries without rerunning the original query
 - memory retention defaults to keep history indefinitely
 - history lookup and relevance scoring are stricter and more intentional
+- calculation-definition requests now use the same governed HR path as other in-scope follow-ups
+- `GET /api/stats` now returns scoped `trend_summary` and `trend_series` payloads
+- `POST /api/reports/export/excel-config` supports configurable governed workbook generation
+- `POST /api/reports/export/pdf` supports insight-oriented one-page briefs
+- `POST /api/reports/export/ppt` supports PowerPoint output for chart and selected-visual surfaces
 
 ## 13. Current Acceptance Criteria
 
@@ -338,10 +374,14 @@ The product should be considered consistent with today's spec when all of the fo
 - the center board shows headcount first and uses HR-leader KPI labels
 - saved chats recall cached insights instead of rerunning SQL
 - `yes` and similar short replies continue the active or recalled HR thread
+- `show me how you calculated this metric` explains the metric definition, columns used, formula, and snapshot caveats when prior context exists
 - `Relevant Chats` is intentionally sparse unless a close historical match exists
 - `Past Chats` reflects broader cross-session history
-- `Favorite Topics` is open by default and other sidebar history sections start collapsed
+- all sidebar history sections start collapsed by default until the user chooses otherwise
 - visible UI copy avoids overusing `scope` and instead speaks in business-unit and workforce terms
+- direct MoM and YoY trend asks return chart-first trend output
+- report tables favor Excel export, while insight PDF and PowerPoint exports appear only on the right surfaces
+- trend values shown in the UI reflect the real backend payload rather than placeholder zeros when trend fields are unavailable
 
 ## 14. Files Most Directly Affected By Today's Work
 
@@ -354,7 +394,10 @@ Primary product and runtime files:
 - `agent/tools.py`
 - `database/context_store.py`
 - `database/connector.py`
+- `database/workforce_history.py`
 - `setup_db.py`
+- `utils/build_workforce_history.py`
+- `utils/report_artifacts.py`
 - `static/index.html`
 - `static/app.js`
 - `static/style.css`
@@ -362,10 +405,14 @@ Primary product and runtime files:
 Primary tests and docs updated during today's work:
 - `tests/test_chat_context.py`
 - `tests/test_history_personalization.py`
+- `tests/test_trend_integration.py`
+- `tests/test_report_artifacts.py`
+- `tests/test_workforce_history.py`
 - `README.md`
 - `docs/ARCHITECTURE.md`
 - `docs/DATA_DICTIONARY.md`
 - `docs/CODE_LOG.md`
+- `docs/RELEASE_NOTES_2026-04-16.md`
 
 ## 15. Notes For Future Work
 
@@ -375,3 +422,5 @@ Areas intentionally left for future refinement:
 - expand the recall model from compact summaries into richer structured insight objects if needed
 - add more formal UI acceptance tests for personalized navigation and recall behavior
 - decide whether a larger production data model should replace the current demo snapshot dataset
+- replace the simulated monthly trend layer with a governed real HRIS history when available
+- add richer artifact provenance and stable table-context identifiers for downstream export flows

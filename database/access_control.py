@@ -14,6 +14,8 @@ HR_SCOPE_KEYWORDS = {
     "retention", "salary", "compensation", "pay", "income", "promotion", "tenure",
     "performance", "rating", "workforce", "manager", "team", "department", "hiring",
     "recruiting", "satisfaction", "engagement", "policy", "benefits", "leave", "overtime",
+    "attriting", "attrited", "gender", "demographic", "women", "woman", "female", "male",
+    "trend", "trends", "mom", "month over month", "yoy", "year over year", "rolling 12",
 }
 
 ACCESS_CAPABILITY_PHRASES = (
@@ -53,12 +55,12 @@ ACCESS_CAPABILITY_OBJECTS = {
 
 METRIC_KEYWORDS = {
     "headcount": {"headcount", "hc", "employee count", "how many", "total employees", "org size"},
-    "attrition": {"attrition", "turnover", "retention", "left", "leavers", "overtime", "risk"},
+    "attrition": {"attrition", "attriting", "attrited", "turnover", "retention", "left", "leavers", "overtime", "risk"},
     "compensation": {"salary", "compensation", "income", "pay", "bonus", "hike"},
     "performance": {"performance", "rating", "review"},
     "satisfaction": {"satisfaction", "engagement", "work-life", "environment", "relationship"},
-    "tenure": {"tenure", "years", "promotion", "experience", "working years"},
-    "demographics": {"gender", "age", "marital", "demographic", "education"},
+    "tenure": {"tenure", "years", "promotion", "promote", "promoted", "promo", "experience", "working years"},
+    "demographics": {"gender", "age", "marital", "demographic", "education", "women", "woman", "men", "man", "female", "male"},
     "policy": {"policy", "policies", "benefits", "leave", "pto", "compliance", "handbook"},
 }
 
@@ -170,7 +172,11 @@ class AccessProfile:
 
     def is_hr_related_question(self, question: str) -> bool:
         lowered = question.lower()
-        return self.is_access_capability_question(question) or any(keyword in lowered for keyword in HR_SCOPE_KEYWORDS)
+        return (
+            self.is_access_capability_question(question)
+            or bool(self.requested_metrics_for_question(question))
+            or any(keyword in lowered for keyword in HR_SCOPE_KEYWORDS)
+        )
 
     def can_access_question(self, question: str) -> tuple[bool, str]:
         if not self.is_hr_related_question(question):
